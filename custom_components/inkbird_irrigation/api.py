@@ -76,9 +76,20 @@ class InkbirdDevice:
         if str(DP_AUTO_REMAINING) in dps:
             self.auto_remaining = int(dps[str(DP_AUTO_REMAINING)])
         if str(DP_ACTIVE_ZONE) in dps:
-            self.active_zone = int(dps[str(DP_ACTIVE_ZONE)])
+            # DP 110 is a bitmask: bit 0 = zone 1, bit 1 = zone 2, etc.
+            # Convert to 1-based zone number of the lowest set bit (the
+            # currently running zone), or 0 when nothing is active.
+            bitmask = int(dps[str(DP_ACTIVE_ZONE)])
+            if bitmask:
+                self.active_zone = (bitmask & -bitmask).bit_length()  # lowest set bit → 1-based zone
+            else:
+                self.active_zone = 0
         if str(DP_QUEUED_ZONE) in dps:
-            self.queued_zone = int(dps[str(DP_QUEUED_ZONE)])
+            bitmask = int(dps[str(DP_QUEUED_ZONE)])
+            if bitmask:
+                self.queued_zone = (bitmask & -bitmask).bit_length()
+            else:
+                self.queued_zone = 0
 
 
 class InkbirdAPI:
@@ -297,19 +308,21 @@ class InkbirdAPI:
         # If already in cloud mode, go straight to cloud
         if self._using_cloud and self._has_cloud:
             return self._cloud_turn_on(zone, duration_minutes)
-        # Try local
+        # Try local.
+        # The device starts a zone when its countdown DP is set to a non-zero
+        # value.  Writing to the switch DPs (1-6) or to DP 110 (active-zone
+        # bitmask) is not required for local control — the countdown is the
+        # authoritative start trigger, exactly as the cloud path uses
+        # countdown_N.
         try:
             d = self._ensure_connection()
             if d:
-                # Start zone first via bitmask, then set countdown
-                # Device only accepts countdown changes when zone is running
-                zone_bitmask = 1 << (zone - 1)
                 dp_countdown = DP_ZONE_COUNTDOWN[zone]
-                p = d.generate_payload(tinytuya.CONTROL, {"110": zone_bitmask})
-                d.send(p)
-                time.sleep(0.5)
                 d.set_value(dp_countdown, duration_minutes)
-                _LOGGER.warning("Zone %d turned ON for %d minutes (local) - dp=%s bitmask=%d", zone, duration_minutes, str(dp_countdown), zone_bitmask)
+                _LOGGER.debug(
+                    "Zone %d turned ON for %d minutes (local) dp=%d",
+                    zone, duration_minutes, dp_countdown,
+                )
                 time.sleep(1)  # Wait for device to process before next command
                 return True
         except Exception as exc:  # noqa: BLE001
@@ -354,12 +367,16 @@ class InkbirdAPI:
                 _LOGGER.debug("Zone %d turned OFF (cloud)", zone)
                 return True
             return False
-        # Try local
+        # Try local.
+        # The switch DPs (1-6) are read-only status outputs on this device —
+        # writing False to them is silently ignored by the firmware.  Setting
+        # the countdown DP to 0 is the correct way to stop a running zone.
         try:
             d = self._ensure_connection()
             if d:
-                d.set_value(DP_ZONE_SWITCH[zone], False)
-                _LOGGER.debug("Zone %d turned OFF (local)", zone)
+                dp_countdown = DP_ZONE_COUNTDOWN[zone]
+                d.set_value(dp_countdown, 0)
+                _LOGGER.debug("Zone %d turned OFF (local) dp=%d=0", zone, dp_countdown)
                 time.sleep(1)
                 return True
         except Exception as exc:  # noqa: BLE001

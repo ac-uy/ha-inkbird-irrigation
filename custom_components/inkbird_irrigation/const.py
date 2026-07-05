@@ -18,9 +18,11 @@ DP_ZONE_COUNTDOWN = {1: 13, 2: 14, 3: 15, 4: 16, 5: 17, 6: 18}
 # Zone elapsed time counters (int): minutes elapsed since zone started
 DP_ZONE_ELAPSED = {1: 25, 2: 26, 3: 27, 4: 28, 5: 29, 6: 30}
 
-# Zone duration settings — not yet discovered which DP controls this
-# The device appears to use a fixed 30-minute default
-DP_ZONE_DURATION = {1: 25, 2: 26, 3: 27, 4: 28, 5: 29, 6: 30}  # placeholder
+# Zone duration settings — the device does not expose a writable per-zone
+# duration DP via local Tuya.  Duration is passed as the countdown value when
+# starting a zone.  This mapping is kept as a reference placeholder only and
+# must NOT be written to; DPs 25-30 are read-only elapsed-time counters.
+DP_ZONE_DURATION = {1: 25, 2: 26, 3: 27, 4: 28, 5: 29, 6: 30}  # read-only elapsed, not a duration setpoint
 
 # System DPs
 DP_SYSTEM_POWER = 40        # str: "on" / "off" — main valve control
@@ -30,8 +32,8 @@ DP_POWER_SWITCH = 102       # bool — power on/off
 DP_AUTO_REMAINING = 103     # int: minutes remaining in auto irrigation
 DP_RAIN_SENSOR_ENABLED = 107  # bool — rain sensor main switch
 DP_SEASONAL_ADJUST = 109    # int: seasonal adjustment percentage
-DP_ACTIVE_ZONE = 110        # int: bitmask of currently active zone
-DP_QUEUED_ZONE = 111        # int: bitmask of queued zone
+DP_ACTIVE_ZONE = 110        # int: bitmask of currently active zone(s) — bit 0 = zone 1, bit 1 = zone 2, …
+DP_QUEUED_ZONE = 111        # int: bitmask of queued zone(s)
 
 # Config entry keys
 CONF_DEVICE_ID = "device_id"

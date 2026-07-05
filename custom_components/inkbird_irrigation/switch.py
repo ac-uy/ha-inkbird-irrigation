@@ -67,11 +67,17 @@ class InkbirdZoneSwitch(InkbirdEntity, SwitchEntity):
         from .number import _zone_durations
         entry_id = self.coordinator.entry.entry_id
         duration = _zone_durations.get(entry_id, {}).get(self._zone, 30)
-        import logging
-        logging.getLogger(__name__).warning("Zone %d turn_on with duration=%d (from _zone_durations)", self._zone, duration)
+        _LOGGER.debug("Zone %d turn_on with duration=%d", self._zone, duration)
         await self.hass.async_add_executor_job(
             self.coordinator.api.turn_on_zone, self._zone, duration
         )
+        # Optimistic update: mutate the shared device model then broadcast to
+        # ALL coordinator-linked entities (switches + sensors) at once so the
+        # countdown sensor also updates immediately without waiting for the
+        # next scheduled poll.
+        self.coordinator.api.device.zone_active[self._zone] = True
+        self.coordinator.api.device.zone_countdown[self._zone] = duration
+        self.coordinator.async_set_updated_data(self.coordinator.api.device)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -79,6 +85,11 @@ class InkbirdZoneSwitch(InkbirdEntity, SwitchEntity):
         await self.hass.async_add_executor_job(
             self.coordinator.api.turn_off_zone, self._zone
         )
+        # Optimistic update: broadcast to all coordinator-linked entities so
+        # the countdown sensor drops to 0 immediately.
+        self.coordinator.api.device.zone_active[self._zone] = False
+        self.coordinator.api.device.zone_countdown[self._zone] = 0
+        self.coordinator.async_set_updated_data(self.coordinator.api.device)
         await self.coordinator.async_request_refresh()
 
 
