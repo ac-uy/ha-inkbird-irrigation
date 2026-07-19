@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-19
+
+### Added
+- Multi-model support: IIC-600 and IIC-800 WIFI
+- Device profile abstraction (`models.py`) with auto-detection from returned DPs
+- IIC-800 zone control via DP 45 (raw per-zone durations) + DP 101 (operation_mode)
+- 8-zone support for IIC-800 with bitmask state (DP 107/108)
+- Config flow model selector (Auto-detect / IIC-600 / IIC-800)
+- IIC-800 specific sensors: irrigation mode, active/queued zone bitmask
+- IIC-800 specific switches: rain sensor, timer error alarm, cancel alarm voice
+
+### Changed
+- API client refactored to be profile-driven
+- Seasonal adjust range for IIC-800: -90 to 100 (step 10)
+
+### Thanks
+- @gonzzovela for reporting IIC-800 incompatibility and providing the full DP extract ([#3](https://github.com/ac-uy/ha-inkbird-irrigation/issues/3))
+
 ## [0.6.0] - 2026-07-05
 
 ### Fixed

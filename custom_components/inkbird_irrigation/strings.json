@@ -3,12 +3,16 @@
     "step": {
       "user": {
         "title": "Inkbird Irrigation Setup",
-        "description": "Enter your Inkbird IIC-600 device credentials. You can get these from the Tuya IoT Platform (iot.tuya.com).",
+        "description": "Enter your Inkbird irrigation controller credentials. You can get these from the Tuya IoT Platform (iot.tuya.com).",
         "data": {
           "device_name": "Device name",
+          "device_model": "Device model",
           "device_id": "Device ID",
           "local_key": "Local Key",
-          "device_ip": "Device IP address"
+          "device_ip": "Device IP address",
+          "cloud_api_key": "Cloud API Key (optional)",
+          "cloud_api_secret": "Cloud API Secret (optional)",
+          "cloud_api_region": "Cloud API Region (optional)"
         }
       }
     },
