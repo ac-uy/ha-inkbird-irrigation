@@ -7,6 +7,7 @@ data and issue commands without hard-coding any particular DP layout.
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -30,13 +31,13 @@ class DeviceProfile:
     tuya_version: float
 
     # --- DP mappings (zone-indexed dicts or single DPs) ---
-    # Zone switches: zone_number → DP id (IIC-600 has per-zone bool DPs)
+    # Zone switches: zone_number -> DP id (IIC-600 has per-zone bool DPs)
     dp_zone_switch: dict[int, int] = field(default_factory=dict)
 
-    # Zone countdown timers: zone_number → DP id
+    # Zone countdown timers: zone_number -> DP id
     dp_zone_countdown: dict[int, int] = field(default_factory=dict)
 
-    # Zone elapsed time: zone_number → DP id
+    # Zone elapsed time: zone_number -> DP id
     dp_zone_elapsed: dict[int, int] = field(default_factory=dict)
 
     # System DPs — may or may not be present per model
@@ -51,14 +52,14 @@ class DeviceProfile:
     dp_queued_zone_bitmask: int | None = None
 
     # IIC-800 specific DPs
-    dp_normal_time: int | None = None           # DP 38 — schedule/timer config (String)
+    dp_normal_time: int | None = None           # DP 38 — schedule/timer config (Raw)
     dp_irrigation_mode: int | None = None       # DP 44 — "order" / "together" (Enum)
-    dp_irrigation_time_all: int | None = None   # DP 45 — per-zone durations (Raw bytes)
+    dp_irrigation_time_all: int | None = None   # DP 45 — 34 bytes raw (see below)
     dp_operation_mode: int | None = None        # DP 101 — "OFF"/"Manual"/"Auto" (Enum)
     dp_reset_device: int | None = None          # DP 105 — reset (Boolean)
     dp_timeerror_alarm: int | None = None       # DP 106 — time error alarm (Boolean)
     dp_cancel_alarm_voice: int | None = None    # DP 109 — cancel alarm voice (Boolean)
-    dp_merge_history: int | None = None         # DP 104 — history integer
+    dp_merge_history: int | None = None         # DP 104 — history (Raw 4 bytes)
 
     # Control semantics
     zone_control_method: str = "countdown"  # "countdown" (IIC-600) or "bitmask_raw" (IIC-800)
@@ -110,16 +111,34 @@ IIC_600_PROFILE = DeviceProfile(
 #
 # The IIC-800 uses a fundamentally different approach:
 # - No per-zone switch DPs (zones are controlled via DP 45 raw bytes + bitmask)
-# - DP 45 (irrigation_time_all): Raw bytes encoding per-zone durations (8 zones)
+# - DP 45 (irrigation_time_all): 34 bytes raw — see encode/decode functions below
 # - DP 107 (zonerun_state): bitmask of currently running zones (8 bits)
 # - DP 108 (pendingzone_state): bitmask of queued zones (8 bits)
 # - DP 44 (irrigation_mode): "order" (sequential) or "together" (parallel)
 # - DP 101 (operation_mode): "OFF" / "Manual" / "Auto"
-# - DP 38 (normal_time): schedule config string
+# - DP 38 (normal_time): schedule config (raw bytes, 20 bytes per channel)
+# - DP 104 (Merge_History): 4 bytes raw — see decode function below
 #
-# Zone control hypothesis:
-#   To start zones, write DP 45 with durations then set DP 101 to "Manual".
-#   The device will run zones per the mode in DP 44.
+# DP 45 Format (34 bytes):
+#   Byte 0: command type (0=query, 1=start/reset manual, 2=auto running report)
+#   Byte 1: target (0=all stations, 1=specific stations)
+#   Bytes 2-17: stations 1-8 running time (2 bytes each, big-endian, minutes)
+#   Bytes 18-33: stations 1-8 single-use duration (2 bytes each, big-endian, minutes)
+#
+# DP 38 Format (20 bytes per channel, up to 8 channels = 160 bytes):
+#   Byte 0: station number (1-8)
+#   Byte 1: irrigation duration in minutes (0 = disabled)
+#   Bytes 2-13: up to 6 start times (2 bytes each: hour, minute; 0xFFFF = unused)
+#   Byte 14: cycle mode (0=weekly, 1=odd, 2=even, 3=interval)
+#   Byte 15: weekday bitmask (bits 0-6 = Sun-Sat) or interval days (1-9)
+#   Bytes 16-18: interval start date (year_offset, month, day)
+#   Byte 19: rain sensor follow (0=ignore, 1=follow)
+#
+# DP 104 Format (4 bytes, read-only):
+#   Bytes 2-3 (big-endian): total irrigation time in minutes
+#   Byte 1: irrigation channel number
+#   Byte 0 bits 7-4: auto(0) or manual(1)
+#   Byte 0 bits 3-0: valve state
 
 IIC_800_PROFILE = DeviceProfile(
     model=DeviceModel.IIC_800,
@@ -149,6 +168,170 @@ IIC_800_PROFILE = DeviceProfile(
     dp_merge_history=104,
     zone_control_method="bitmask_raw",
 )
+
+
+# ─── DP 45 Encoding/Decoding (IIC-800) ───────────────────────────────────────
+
+DP45_LENGTH = 34  # Expected payload length
+
+
+def encode_dp45_start_manual(durations: dict[int, int], num_zones: int = 8) -> bytes:
+    """Encode a DP 45 payload to START manual irrigation on specific zones.
+
+    Args:
+        durations: dict mapping zone (1-8) to duration in minutes.
+                   Zones with 0 or missing entries won't run.
+        num_zones: number of zones (default 8).
+
+    Returns:
+        34-byte payload.
+    """
+    payload = bytearray(DP45_LENGTH)
+    payload[0] = 0x01  # command = start/reset manual irrigation
+    payload[1] = 0x01  # target = specific stations
+
+    # Bytes 2-17: running time per zone (initially 0 — device fills in as zones run)
+    # Bytes 18-33: single-use duration per zone
+    for zone in range(1, num_zones + 1):
+        dur = durations.get(zone, 0)
+        offset = 18 + (zone - 1) * 2
+        struct.pack_into(">H", payload, offset, dur)
+
+    return bytes(payload)
+
+
+def encode_dp45_query() -> bytes:
+    """Encode a DP 45 query payload."""
+    payload = bytearray(DP45_LENGTH)
+    payload[0] = 0x00  # command = query
+    payload[1] = 0x00  # all stations
+    return bytes(payload)
+
+
+def decode_dp45(data: bytes, num_zones: int = 8) -> dict[str, Any]:
+    """Decode a 34-byte DP 45 payload.
+
+    Returns dict with:
+        command_type: int (0=query, 1=start/reset, 2=auto report)
+        target: int (0=all, 1=specific)
+        running_time: dict[int, int] — zone -> minutes currently running
+        duration: dict[int, int] — zone -> single-use duration in minutes
+    """
+    result: dict[str, Any] = {
+        "command_type": 0,
+        "target": 0,
+        "running_time": {},
+        "duration": {},
+    }
+
+    if len(data) < DP45_LENGTH:
+        # Graceful handling of short payloads
+        return result
+
+    result["command_type"] = data[0]
+    result["target"] = data[1]
+
+    for zone in range(1, num_zones + 1):
+        rt_offset = 2 + (zone - 1) * 2
+        dur_offset = 18 + (zone - 1) * 2
+        result["running_time"][zone] = struct.unpack_from(">H", data, rt_offset)[0]
+        result["duration"][zone] = struct.unpack_from(">H", data, dur_offset)[0]
+
+    return result
+
+
+# ─── DP 38 Decoding (IIC-800 schedule) ───────────────────────────────────────
+
+CHANNEL_BLOCK_SIZE = 20  # bytes per channel
+
+
+@dataclass
+class ScheduleChannel:
+    """Parsed schedule for one channel from DP 38."""
+
+    station: int = 0
+    duration_minutes: int = 0
+    start_times: list[tuple[int, int]] = field(default_factory=list)  # (hour, minute)
+    cycle_mode: int = 0  # 0=weekly, 1=odd, 2=even, 3=interval
+    weekday_bitmask: int = 0  # bits 0-6 = Sun-Sat (if weekly) or interval days
+    interval_start_date: tuple[int, int, int] = (0, 0, 0)  # (year_offset, month, day)
+    rain_sensor_follow: bool = False
+
+
+def decode_dp38(data: bytes) -> list[ScheduleChannel]:
+    """Decode DP 38 (normal_time) raw bytes into channel schedules.
+
+    Each channel is a 20-byte block. Up to 8 channels.
+    """
+    channels: list[ScheduleChannel] = []
+
+    if not data or len(data) < CHANNEL_BLOCK_SIZE:
+        return channels
+
+    num_blocks = len(data) // CHANNEL_BLOCK_SIZE
+
+    for i in range(num_blocks):
+        offset = i * CHANNEL_BLOCK_SIZE
+        block = data[offset:offset + CHANNEL_BLOCK_SIZE]
+        if len(block) < CHANNEL_BLOCK_SIZE:
+            break
+
+        ch = ScheduleChannel()
+        ch.station = block[0]
+        ch.duration_minutes = block[1]
+
+        # 6 start times, 2 bytes each (hour, minute). 0xFF,0xFF = unused.
+        for t in range(6):
+            t_off = 2 + t * 2
+            hour = block[t_off]
+            minute = block[t_off + 1]
+            if hour != 0xFF or minute != 0xFF:
+                ch.start_times.append((hour, minute))
+
+        ch.cycle_mode = block[14]
+        ch.weekday_bitmask = block[15]
+        ch.interval_start_date = (block[16], block[17], block[18])
+        ch.rain_sensor_follow = block[19] != 0
+
+        channels.append(ch)
+
+    return channels
+
+
+# ─── DP 104 Decoding (Merge_History) ─────────────────────────────────────────
+
+@dataclass
+class MergeHistoryEntry:
+    """Parsed DP 104 (Merge_History) 4-byte payload."""
+
+    total_time_minutes: int = 0
+    channel: int = 0
+    is_manual: bool = False
+    valve_state: int = 0
+
+
+def decode_dp104(data: bytes) -> MergeHistoryEntry:
+    """Decode DP 104 (Merge_History) — 4 bytes, read-only.
+
+    Layout:
+        Bytes 2-3 (big-endian): total irrigation time in minutes
+        Byte 1: irrigation channel number
+        Byte 0:
+            bits 7-4: auto(0) or manual(1)
+            bits 3-0: valve state
+    """
+    entry = MergeHistoryEntry()
+
+    if not data or len(data) < 4:
+        return entry
+
+    # Byte ordering: data[0] is byte 0, data[1] is byte 1, data[2..3] is bytes 2-3
+    entry.valve_state = data[0] & 0x0F
+    entry.is_manual = ((data[0] >> 4) & 0x0F) != 0
+    entry.channel = data[1]
+    entry.total_time_minutes = struct.unpack_from(">H", data, 2)[0]
+
+    return entry
 
 
 # ─── Lookup helpers ───────────────────────────────────────────────────────────

@@ -3,10 +3,10 @@
     "step": {
       "user": {
         "title": "Inkbird Irrigation Setup",
-        "description": "Enter your Inkbird irrigation controller credentials. You can get these from the Tuya IoT Platform (iot.tuya.com).",
+        "description": "Enter your Inkbird irrigation controller credentials. You can get these from the Tuya IoT Platform (iot.tuya.com).\n\n⚠️ IMPORTANT: If you have LocalTuya installed with entities for this device, you MUST remove them first. Tuya devices only allow one local connection at a time.",
         "data": {
           "device_name": "Device name",
-          "device_model": "Device model",
+          "device_model": "Device model (remove any LocalTuya entities for this device before setup)",
           "device_id": "Device ID",
           "local_key": "Local Key",
           "device_ip": "Device IP address",
@@ -17,7 +17,7 @@
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to device. Check IP, Device ID, and Local Key."
+      "cannot_connect": "Cannot connect to device. Check IP, Device ID, and Local Key. If you have LocalTuya configured for this device, remove those entities first — only one local connection is allowed at a time."
     },
     "abort": {
       "already_configured": "This device is already configured."

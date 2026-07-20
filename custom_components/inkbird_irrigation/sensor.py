@@ -45,6 +45,7 @@ async def async_setup_entry(
         entities.append(InkbirdIrrigationModeSensor(coordinator))
         entities.append(InkbirdActiveZoneBitmaskSensor(coordinator))
         entities.append(InkbirdQueuedZoneBitmaskSensor(coordinator))
+        entities.append(InkbirdMergeHistorySensor(coordinator))
 
     async_add_entities(entities)
 
@@ -210,3 +211,46 @@ class InkbirdQueuedZoneBitmaskSensor(InkbirdEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         return {"bitmask": self.coordinator.api.device.queued_zone}
+
+
+
+class InkbirdMergeHistorySensor(InkbirdEntity, SensorEntity):
+    """Sensor showing last irrigation history entry (IIC-800 DP 104).
+
+    DP 104 (Merge_History) is 4 bytes:
+        Bytes 2-3 (big-endian): total irrigation time in minutes
+        Byte 1: irrigation channel number
+        Byte 0 bits 7-4: auto(0) or manual(1)
+        Byte 0 bits 3-0: valve state
+    """
+
+    _attr_native_unit_of_measurement = "min"
+    _attr_icon = "mdi:history"
+
+    def __init__(self, coordinator: InkbirdCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{DOMAIN}_{self._device_id}_merge_history"
+        self._attr_name = "Last irrigation time"
+
+    @property
+    def native_value(self) -> int:
+        """Return total irrigation time in minutes from last history entry."""
+        parsed = self.coordinator.api.device.merge_history_parsed
+        if parsed:
+            return parsed.total_time_minutes
+        return 0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return detailed history attributes."""
+        parsed = self.coordinator.api.device.merge_history_parsed
+        if parsed:
+            return {
+                "channel": parsed.channel,
+                "is_manual": parsed.is_manual,
+                "valve_state": parsed.valve_state,
+                "total_time_minutes": parsed.total_time_minutes,
+                "raw_hex": self.coordinator.api.device.merge_history_raw.hex()
+                if self.coordinator.api.device.merge_history_raw else "",
+            }
+        return {}

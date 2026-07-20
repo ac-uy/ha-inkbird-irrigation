@@ -6,7 +6,6 @@ Supports IIC-600 and IIC-800 models via device profiles.
 from __future__ import annotations
 
 import logging
-import struct
 import time
 from typing import Any
 
@@ -29,6 +28,10 @@ from .const import (
 from .models import (
     DeviceModel,
     DeviceProfile,
+    decode_dp45,
+    decode_dp104,
+    decode_dp38,
+    encode_dp45_start_manual,
     detect_model_from_dps,
     get_profile,
 )
@@ -65,11 +68,14 @@ class InkbirdDevice:
         self.irrigation_mode: str = "order"  # "order" / "together"
         self.operation_mode: str = "OFF"  # "OFF" / "Manual" / "Auto"
         self.irrigation_time_all: bytes = b""  # raw DP 45
-        self.normal_time: str = ""  # DP 38 schedule string
+        self.normal_time: str = ""  # DP 38 schedule string (hex repr)
+        self.normal_time_raw: bytes = b""  # DP 38 raw bytes
         self.timeerror_alarm: bool = False
         self.cancel_alarm_voice: bool = False
         self.reset_device: bool = False
         self.merge_history: int = 0
+        self.merge_history_raw: bytes = b""  # DP 104 raw bytes
+        self.merge_history_parsed: Any = None  # MergeHistoryEntry
 
     def update_from_dps(self, dps: dict[str, Any]) -> None:
         """Update device state from Tuya data points."""
@@ -152,13 +158,17 @@ class InkbirdDevice:
             self.irrigation_time_all = self._parse_raw_dp(raw)
             self._decode_zone_durations()
 
-        # Normal time — schedule string (DP 38)
+        # Normal time — schedule raw bytes (DP 38)
         if p.dp_normal_time and str(p.dp_normal_time) in dps:
-            self.normal_time = str(dps[str(p.dp_normal_time)])
+            raw = dps[str(p.dp_normal_time)]
+            self.normal_time_raw = self._parse_raw_dp(raw)
+            self.normal_time = raw if isinstance(raw, str) else raw.hex() if isinstance(raw, bytes) else str(raw)
 
-        # Merge history (DP 104)
+        # Merge history (DP 104) — 4 bytes raw
         if p.dp_merge_history and str(p.dp_merge_history) in dps:
-            self.merge_history = int(dps[str(p.dp_merge_history)])
+            raw = dps[str(p.dp_merge_history)]
+            self.merge_history_raw = self._parse_raw_dp(raw)
+            self.merge_history_parsed = decode_dp104(self.merge_history_raw)
 
         # Reset device (DP 105)
         if p.dp_reset_device and str(p.dp_reset_device) in dps:
@@ -192,23 +202,21 @@ class InkbirdDevice:
     def _decode_zone_durations(self) -> None:
         """Decode per-zone durations from irrigation_time_all (DP 45).
 
-        The raw payload is hypothesized to be 8 x 2-byte big-endian unsigned
-        integers representing duration in minutes for each zone.  If the
-        payload is shorter, remaining zones default to 0.
+        The raw payload is 34 bytes:
+          Byte 0: command type (0=query, 1=start/reset, 2=auto report)
+          Byte 1: target (0=all, 1=specific)
+          Bytes 2-17: stations 1-8 running time (2 bytes each, big-endian, minutes)
+          Bytes 18-33: stations 1-8 single-use duration (2 bytes each, big-endian, minutes)
         """
         data = self.irrigation_time_all
-        num_zones = self.profile.num_zones
-        for zone in range(1, num_zones + 1):
-            offset = (zone - 1) * 2
-            if offset + 2 <= len(data):
-                self.zone_duration[zone] = struct.unpack_from(">H", data, offset)[0]
-            else:
-                # Fallback: try single-byte encoding
-                byte_offset = zone - 1
-                if byte_offset < len(data):
-                    self.zone_duration[zone] = data[byte_offset]
-                else:
-                    self.zone_duration[zone] = 0
+        parsed = decode_dp45(data, self.profile.num_zones)
+
+        # Use running_time if zones are active, otherwise show duration
+        for zone in range(1, self.profile.num_zones + 1):
+            running = parsed["running_time"].get(zone, 0)
+            duration = parsed["duration"].get(zone, 0)
+            # Show running time if non-zero (zone is active), else show configured duration
+            self.zone_duration[zone] = running if running > 0 else duration
 
 
 
@@ -279,18 +287,29 @@ class InkbirdAPI:
             )
         return self._cloud
 
-    def _ensure_connection(self) -> tinytuya.Device | None:
-        """Get or create a persistent connection."""
-        if self._tuya and self._connected:
+    def _ensure_connection(self, version: float | None = None) -> tinytuya.Device | None:
+        """Get or create a persistent connection.
+
+        Args:
+            version: If provided, force this protocol version. Otherwise use profile default.
+        """
+        if self._tuya and self._connected and version is None:
             return self._tuya
+        # Close existing connection if switching versions
+        if self._tuya and version is not None:
+            self._reset_connection()
         try:
+            ver = version if version is not None else self._profile.tuya_version
             self._tuya = tinytuya.Device(self._device_id, self._device_ip, self._local_key)
-            self._tuya.set_version(self._profile.tuya_version)
+            self._tuya.set_version(ver)
             self._tuya.set_socketPersistent(True)
             self._tuya.set_socketTimeout(5)
             self._connected = True
             self._fail_count = 0
-            _LOGGER.debug("Persistent connection established to %s", self._device_ip)
+            _LOGGER.debug(
+                "Persistent connection established to %s (protocol v%.1f)",
+                self._device_ip, ver,
+            )
             return self._tuya
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Connection setup failed: %s", exc)
@@ -307,40 +326,104 @@ class InkbirdAPI:
         self._tuya = None
         self._connected = False
 
+    def _try_connect_with_version(self, version: float) -> dict[str, Any] | None:
+        """Attempt connection with a specific protocol version, return DPs or None."""
+        self._reset_connection()
+        d = self._ensure_connection(version=version)
+        if not d:
+            return None
+        try:
+            status = d.status()
+            _LOGGER.debug(
+                "Protocol v%.1f response from %s: %s", version, self._device_ip, status
+            )
+            if status and "dps" in status and status["dps"]:
+                return status["dps"]
+            # Log what the device returned even if empty
+            if status:
+                _LOGGER.warning(
+                    "Device at %s returned status with protocol v%.1f but no DPs: %s",
+                    self._device_ip, version, status,
+                )
+            else:
+                _LOGGER.warning(
+                    "Device at %s returned None/empty with protocol v%.1f",
+                    self._device_ip, version,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("status() failed with protocol v%.1f: %s", version, exc)
+        return None
 
     def connect(self) -> bool:
-        """Initialize the Tuya device connection and auto-detect model if needed."""
-        try:
-            d = self._ensure_connection()
-            if not d:
-                return False
-            status = d.status()
-            if status and "dps" in status:
-                dps = status["dps"]
-                # Auto-detect model if not explicitly set or if detection makes sense
-                detected = detect_model_from_dps(dps)
-                if detected and detected != self._model:
-                    _LOGGER.info(
-                        "Auto-detected model %s (was configured as %s), switching profile",
-                        detected.value, self._model.value,
-                    )
-                    self._model = detected
-                    self._profile = get_profile(detected)
-                    self.device = InkbirdDevice(self._profile)
+        """Initialize the Tuya device connection and auto-detect model if needed.
 
-                self.device.online = True
-                self.device.update_from_dps(dps)
-                _LOGGER.debug(
-                    "Connected to Inkbird %s at %s", self._model.value, self._device_ip
+        Tries the configured protocol version first. If no DPs are returned,
+        retries with alternative protocol versions (3.3, 3.4, 3.5) to handle
+        devices that use a different Tuya protocol than expected.
+        """
+        # Protocol versions to try: configured version first, then alternatives
+        configured_ver = self._profile.tuya_version
+        versions_to_try = [configured_ver]
+        for v in (3.4, 3.3, 3.5):
+            if v != configured_ver:
+                versions_to_try.append(v)
+
+        dps: dict[str, Any] | None = None
+        successful_version: float = configured_ver
+
+        for ver in versions_to_try:
+            dps = self._try_connect_with_version(ver)
+            if dps:
+                successful_version = ver
+                if ver != configured_ver:
+                    _LOGGER.info(
+                        "Device responded on protocol v%.1f (configured was v%.1f)",
+                        ver, configured_ver,
+                    )
+                break
+            # Small delay between retries to let device settle
+            time.sleep(1)
+
+        if dps:
+            # Auto-detect model from returned DPs
+            detected = detect_model_from_dps(dps)
+            if detected and detected != self._model:
+                _LOGGER.info(
+                    "Auto-detected model %s (was configured as %s), switching profile",
+                    detected.value, self._model.value,
                 )
-                return True
-            _LOGGER.error("No DPs returned from device at %s", self._device_ip)
-            self._reset_connection()
-            return False
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("Connection failed: %s", exc)
-            self._reset_connection()
-            return False
+                self._model = detected
+                self._profile = get_profile(detected)
+                self.device = InkbirdDevice(self._profile)
+
+            # Update profile tuya_version to the one that worked
+            if successful_version != self._profile.tuya_version:
+                _LOGGER.info(
+                    "Updating protocol version from %.1f to %.1f for future connections",
+                    self._profile.tuya_version, successful_version,
+                )
+                self._profile.tuya_version = successful_version
+
+            self.device.online = True
+            self.device.update_from_dps(dps)
+            _LOGGER.debug(
+                "Connected to Inkbird %s at %s (protocol v%.1f)",
+                self._model.value, self._device_ip, successful_version,
+            )
+            return True
+
+        _LOGGER.error(
+            "No DPs returned from device at %s after trying protocol versions %s. "
+            "Raw responses were logged at debug level. "
+            "Possible causes: (1) Wrong Device ID or Local Key, "
+            "(2) Another integration (e.g. LocalTuya) has an active connection to this "
+            "device — remove any LocalTuya entities for this device and restart HA, "
+            "(3) The device may be offline or unreachable.",
+            self._device_ip,
+            [f"v{v:.1f}" for v in versions_to_try],
+        )
+        self._reset_connection()
+        return False
 
     def update(self) -> bool:
         """Poll the device for current state. Falls back to cloud if local fails."""
@@ -542,22 +625,21 @@ class InkbirdAPI:
     # ─── IIC-800 Zone Control ──────────────────────────────────────────────────
 
     def _encode_zone_durations_800(self, durations: dict[int, int]) -> bytes:
-        """Encode per-zone durations as raw bytes for DP 45.
+        """Encode per-zone durations as 34-byte raw payload for DP 45.
 
-        Format hypothesis: 8 x 2-byte big-endian unsigned integers (minutes).
-        Each pair represents one zone's duration.  Zero = zone not scheduled.
+        Format (34 bytes):
+          Byte 0 = 0x01 (start manual irrigation)
+          Byte 1 = 0x01 (specific stations)
+          Bytes 2-17: running time per zone (set to 0, device fills in)
+          Bytes 18-33: single-use duration per zone (2 bytes each, big-endian, minutes)
         """
-        payload = bytearray()
-        for zone in range(1, self._profile.num_zones + 1):
-            dur = durations.get(zone, 0)
-            payload.extend(struct.pack(">H", dur))
-        return bytes(payload)
+        return encode_dp45_start_manual(durations, self._profile.num_zones)
 
     def _turn_on_zone_800(self, zone: int, duration_minutes: int) -> bool:
         """Start a zone on IIC-800.
 
-        Strategy: Write DP 45 with the desired zone's duration set, then
-        set DP 101 (operation_mode) to "Manual" to trigger irrigation.
+        Strategy: Write DP 45 (34-byte payload with command=start, target=specific,
+        and the zone's duration set) then set DP 101 (operation_mode) to "Manual".
         The device uses DP 107 (zonerun_state) bitmask to indicate active zones.
         """
         # Build durations: set only the target zone
@@ -632,6 +714,9 @@ class InkbirdAPI:
 
     def turn_on_zone_800_multi(self, durations: dict[int, int]) -> bool:
         """Start multiple zones on IIC-800 with individual durations.
+
+        Sends DP 45 as a 34-byte payload (command=start, target=specific,
+        durations in bytes 18-33) then sets DP 101 to "Manual".
 
         Args:
             durations: dict mapping zone number (1-8) to duration in minutes.
