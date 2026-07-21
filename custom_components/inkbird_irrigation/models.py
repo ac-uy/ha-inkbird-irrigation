@@ -134,18 +134,19 @@ IIC_600_PROFILE = DeviceProfile(
 #   Bytes 16-18: interval start date (year_offset, month, day)
 #   Byte 19: rain sensor follow (0=ignore, 1=follow)
 #
-# DP 104 Format (4 bytes, read-only):
-#   Bytes 2-3 (big-endian): total irrigation time in minutes
-#   Byte 1: irrigation channel number
-#   Byte 0 bits 7-4: auto(0) or manual(1)
-#   Byte 0 bits 3-0: valve state
+# DP 104 Format (4 bytes, read-only, big-endian):
+#   Bytes 0-1 (big-endian uint16): total irrigation time in minutes
+#   Byte 2: irrigation channel number
+#   Byte 3:
+#     bits 7-4: auto(0) or manual(1)
+#     bits 3-0: valve state
 
 IIC_800_PROFILE = DeviceProfile(
     model=DeviceModel.IIC_800,
     num_zones=8,
     product_id="h71ip90tp4mfd6mx",
     category="ggq",
-    tuya_version=3.4,
+    tuya_version=3.3,  # IIC-800 uses protocol v3.3 (confirmed)
     dp_zone_switch={},  # No individual zone switch DPs
     dp_zone_countdown={},  # No individual countdown DPs
     dp_zone_elapsed={},  # No individual elapsed DPs
@@ -313,10 +314,10 @@ class MergeHistoryEntry:
 def decode_dp104(data: bytes) -> MergeHistoryEntry:
     """Decode DP 104 (Merge_History) — 4 bytes, read-only.
 
-    Layout:
-        Bytes 2-3 (big-endian): total irrigation time in minutes
-        Byte 1: irrigation channel number
-        Byte 0:
+    The integer is stored big-endian. Layout of the 4 big-endian bytes:
+        data[0:2] (big-endian uint16): total irrigation time in minutes
+        data[2]: irrigation channel number
+        data[3]:
             bits 7-4: auto(0) or manual(1)
             bits 3-0: valve state
     """
@@ -325,11 +326,10 @@ def decode_dp104(data: bytes) -> MergeHistoryEntry:
     if not data or len(data) < 4:
         return entry
 
-    # Byte ordering: data[0] is byte 0, data[1] is byte 1, data[2..3] is bytes 2-3
-    entry.valve_state = data[0] & 0x0F
-    entry.is_manual = ((data[0] >> 4) & 0x0F) != 0
-    entry.channel = data[1]
-    entry.total_time_minutes = struct.unpack_from(">H", data, 2)[0]
+    entry.total_time_minutes = struct.unpack_from(">H", data, 0)[0]
+    entry.channel = data[2]
+    entry.is_manual = ((data[3] >> 4) & 0x0F) != 0
+    entry.valve_state = data[3] & 0x0F
 
     return entry
 

@@ -197,7 +197,13 @@ class InkbirdDevice:
                 return bytes.fromhex(raw)
             except ValueError:
                 return raw.encode()
-        return bytes(raw) if raw else b""
+        if isinstance(raw, int):
+            # Tuya reports some "raw" DPs as integers — convert to 4 big-endian bytes
+            import struct
+            return struct.pack(">I", raw & 0xFFFFFFFF)
+        if isinstance(raw, (list, bytearray)):
+            return bytes(raw)
+        return b""
 
     def _decode_zone_durations(self) -> None:
         """Decode per-zone durations from irrigation_time_all (DP 45).
