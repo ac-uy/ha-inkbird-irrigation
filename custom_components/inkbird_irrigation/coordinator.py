@@ -17,7 +17,7 @@ SCAN_INTERVAL = timedelta(seconds=15)
 
 
 class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
-    """Coordinator for the Inkbird IIC-600."""
+    """Coordinator for Inkbird irrigation controllers."""
 
     def __init__(
         self,
@@ -31,7 +31,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
         super().__init__(
             hass,
             _LOGGER,
-            name="Inkbird IIC-600",
+            name=f"Inkbird {api.model.value}",
             update_interval=SCAN_INTERVAL,
         )
 
@@ -39,5 +39,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
         """Fetch latest state from the device."""
         success = await self.hass.async_add_executor_job(self.api.update)
         if not success:
-            raise UpdateFailed("Failed to fetch state from Inkbird IIC-600")
+            raise UpdateFailed(
+                f"Failed to fetch state from Inkbird {self.api.model.value}"
+            )
         return self.api.device

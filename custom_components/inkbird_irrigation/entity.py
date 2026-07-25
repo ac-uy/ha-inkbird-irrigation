@@ -7,6 +7,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import InkbirdCoordinator
+from .models import DeviceModel
 
 
 class InkbirdEntity(CoordinatorEntity[InkbirdCoordinator]):
@@ -21,9 +22,15 @@ class InkbirdEntity(CoordinatorEntity[InkbirdCoordinator]):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info."""
+        model = self.coordinator.api.model
+        model_name = {
+            DeviceModel.IIC_600: "IIC-600-WIFI",
+            DeviceModel.IIC_800: "IIC-800-WIFI",
+        }.get(model, model.value)
+
         return DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
-            name=self.coordinator.entry.data.get("device_name", "Inkbird IIC-600"),
+            name=self.coordinator.entry.data.get("device_name", f"Inkbird {model.value}"),
             manufacturer="Inkbird",
-            model="IIC-600-WIFI",
+            model=model_name,
         )

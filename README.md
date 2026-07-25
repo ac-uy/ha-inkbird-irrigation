@@ -19,10 +19,13 @@ A custom Home Assistant integration for the **Inkbird IIC-600-WIFI** smart irrig
 - 🔄 **Sequential zones** — queue multiple zones, they run one at a time (hardware behavior)
 - 📡 **Connection mode sensor** — shows whether running on local or cloud
 
-## Supported Devices
+## Supported Models
 
-- **Inkbird IIC-600-WIFI** (6-zone sprinkler controller)
-- **Inkbird IIC-800-WIFI** (8-zone, untested but likely compatible)
+| Model | Status |
+|-------|--------|
+| IIC-600 WIFI | ✅ Fully supported and tested |
+| IIC-800 WIFI | 🧪 Beta (testing in progress with community) |
+| IIC-400 WIFI | ⚠️ Experimental (untested — community testers needed! See [issue #1](https://github.com/ac-uy/ha-inkbird-irrigation/issues/1)) |
 
 ## Prerequisites
 
@@ -270,4 +273,5 @@ This is an unofficial integration. Inkbird is not affiliated with this project. 
 
 If you find this useful, consider buying me a coffee ☕ or some tokens 🤖:
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/ac-uy)
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?style=flat-square&logo=paypal)](https://paypal.me/AndresCastro965?locale.x=es_ES&country.x=ES)

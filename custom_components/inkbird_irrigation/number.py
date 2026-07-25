@@ -8,9 +8,10 @@ from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, NUM_ZONES
+from .const import DOMAIN
 from .coordinator import InkbirdCoordinator
 from .entity import InkbirdEntity
+from .models import DeviceModel
 
 # Store duration preferences locally (not on device)
 _zone_durations: dict[str, dict[int, int]] = {}
@@ -23,13 +24,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up Inkbird duration number entities."""
     coordinator: InkbirdCoordinator = hass.data[DOMAIN][entry.entry_id]
-    _zone_durations.setdefault(entry.entry_id, {z: 30 for z in range(1, NUM_ZONES + 1)})
-    
+    profile = coordinator.api.profile
+    model = coordinator.api.model
+    num_zones = profile.num_zones
+
+    _zone_durations.setdefault(entry.entry_id, {z: 30 for z in range(1, num_zones + 1)})
+
     entities: list[NumberEntity] = []
-    for zone in range(1, NUM_ZONES + 1):
+
+    # Per-zone duration setting (both models)
+    for zone in range(1, num_zones + 1):
         entities.append(InkbirdZoneDuration(coordinator, zone))
+
+    # Seasonal adjustment (both models, different ranges)
     entities.append(InkbirdSeasonalAdjust(coordinator))
-    
+
     async_add_entities(entities)
 
 
@@ -67,8 +76,6 @@ class InkbirdSeasonalAdjust(InkbirdEntity, NumberEntity):
     """Number entity for seasonal adjustment percentage."""
 
     _attr_native_unit_of_measurement = "%"
-    _attr_native_min_value = 0
-    _attr_native_max_value = 100
     _attr_native_step = 1
     _attr_mode = NumberMode.BOX
     _attr_icon = "mdi:leaf"
@@ -78,6 +85,16 @@ class InkbirdSeasonalAdjust(InkbirdEntity, NumberEntity):
         self._attr_unique_id = f"{DOMAIN}_{self._device_id}_seasonal_adjust"
         self._attr_name = "Seasonal adjustment"
 
+        # IIC-800 has range -90 to 100 (step 10); IIC-600 has 0-100 (step 1)
+        if coordinator.api.model == DeviceModel.IIC_800:
+            self._attr_native_min_value = -90
+            self._attr_native_max_value = 100
+            self._attr_native_step = 10
+        else:
+            self._attr_native_min_value = 0
+            self._attr_native_max_value = 100
+            self._attr_native_step = 1
+
     @property
     def native_value(self) -> float:
         """Return the current seasonal adjustment."""
@@ -85,7 +102,9 @@ class InkbirdSeasonalAdjust(InkbirdEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the seasonal adjustment."""
-        await self.hass.async_add_executor_job(
-            self.coordinator.api.set_dp, 109, int(value)
-        )
-        await self.coordinator.async_request_refresh()
+        dp = self.coordinator.api.profile.dp_seasonal_adjust
+        if dp is not None:
+            await self.hass.async_add_executor_job(
+                self.coordinator.api.set_dp, dp, int(value)
+            )
+            await self.coordinator.async_request_refresh()
