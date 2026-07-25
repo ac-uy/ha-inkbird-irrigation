@@ -16,6 +16,7 @@ from typing import Any
 class DeviceModel(str, Enum):
     """Supported device models."""
 
+    IIC_400 = "IIC-400"
     IIC_600 = "IIC-600"
     IIC_800 = "IIC-800"
 
@@ -157,6 +158,49 @@ IIC_800_PROFILE = DeviceProfile(
     dp_auto_remaining=None,
     dp_rain_sensor=102,  # RainSen_TotalONOFF
     dp_seasonal_adjust=103,  # SeaAdjValue (-90 to 100, step 10)
+    dp_active_zone_bitmask=107,  # zonerun_state
+    dp_queued_zone_bitmask=108,  # pendingzone_state
+    dp_normal_time=38,
+    dp_irrigation_mode=44,
+    dp_irrigation_time_all=45,
+    dp_operation_mode=101,
+    dp_reset_device=105,
+    dp_timeerror_alarm=106,
+    dp_cancel_alarm_voice=109,
+    dp_merge_history=104,
+    zone_control_method="bitmask_raw",
+)
+
+
+# ─── IIC-400 Profile ──────────────────────────────────────────────────────────
+#
+# The IIC-400 is very similar to the IIC-800, but with 4 zones instead of 8.
+# Key differences:
+# - 4 zones instead of 8
+# - Tuya protocol v3.5
+# - DP 110 and DP 111 are simple booleans (NOT bitmasks like the IIC-600)
+# - DP 38 schedule string first byte = 0x04 (4 zones)
+# - Product ID is unknown at this time
+#
+# DP 110: Boolean — purpose TBD (possibly rain delay or similar)
+# DP 111: Boolean — purpose TBD (possibly rain delay or similar)
+
+IIC_400_PROFILE = DeviceProfile(
+    model=DeviceModel.IIC_400,
+    num_zones=4,
+    product_id="",  # Unknown — community testers needed
+    category="ggq",
+    tuya_version=3.5,
+    dp_zone_switch={},  # No individual zone switch DPs
+    dp_zone_countdown={},  # No individual countdown DPs
+    dp_zone_elapsed={},  # No individual elapsed DPs
+    dp_system_power=None,
+    dp_skip_schedule=None,
+    dp_mode=None,
+    dp_power_switch=None,
+    dp_auto_remaining=None,
+    dp_rain_sensor=102,  # RainSen_TotalONOFF (assumed same as IIC-800)
+    dp_seasonal_adjust=103,  # SeaAdjValue (assumed same as IIC-800)
     dp_active_zone_bitmask=107,  # zonerun_state
     dp_queued_zone_bitmask=108,  # pendingzone_state
     dp_normal_time=38,
@@ -337,6 +381,7 @@ def decode_dp104(data: bytes) -> MergeHistoryEntry:
 # ─── Lookup helpers ───────────────────────────────────────────────────────────
 
 PROFILES: dict[DeviceModel, DeviceProfile] = {
+    DeviceModel.IIC_400: IIC_400_PROFILE,
     DeviceModel.IIC_600: IIC_600_PROFILE,
     DeviceModel.IIC_800: IIC_800_PROFILE,
 }
@@ -350,13 +395,29 @@ PRODUCT_ID_MAP: dict[str, DeviceModel] = {
 # IIC-600 has DPs 1-6 (zone switches), IIC-800 has DP 44/45
 IIC_600_SIGNATURE_DPS = {1, 2, 3, 4, 5, 6, 13, 14, 15, 16, 17, 18}
 IIC_800_SIGNATURE_DPS = {38, 44, 45, 107, 108}
+# IIC-400 shares DPs with IIC-800 but has DP 110/111 as booleans (not bitmasks)
+IIC_400_SIGNATURE_DPS = {38, 44, 45, 107, 108, 110, 111}
 
 
 def detect_model_from_dps(dps: dict[str, Any]) -> DeviceModel | None:
-    """Attempt to detect the device model from the returned DP keys."""
+    """Attempt to detect the device model from the returned DP keys.
+
+    Detection strategy:
+    - If DPs 110 and 111 are present AND are booleans → IIC-400
+    - If DP 38 is present and its first byte is 0x04 → IIC-400
+    - If IIC-800 signature DPs match (without boolean 110/111) → IIC-800
+    - If IIC-600 signature DPs match → IIC-600
+    """
     dp_keys = {int(k) for k in dps.keys()}
 
-    # Check IIC-800 signature DPs first (more unique)
+    # Check for IIC-400: has DP 110 and 111 as booleans (not integers/bitmasks)
+    if 110 in dp_keys and 111 in dp_keys:
+        val_110 = dps.get("110", dps.get(110))
+        val_111 = dps.get("111", dps.get(111))
+        if isinstance(val_110, bool) and isinstance(val_111, bool):
+            return DeviceModel.IIC_400
+
+    # Check IIC-800 signature DPs (more unique than IIC-600)
     iic800_hits = dp_keys & IIC_800_SIGNATURE_DPS
     if len(iic800_hits) >= 2:
         return DeviceModel.IIC_800
