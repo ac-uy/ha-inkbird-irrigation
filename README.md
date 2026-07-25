@@ -270,4 +270,5 @@ This is an unofficial integration. Inkbird is not affiliated with this project. 
 
 If you find this useful, consider buying me a coffee ☕ or some tokens 🤖:
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/ac-uy)
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?style=flat-square&logo=paypal)](https://paypal.me/AndresCastro965?locale.x=es_ES&country.x=ES)
