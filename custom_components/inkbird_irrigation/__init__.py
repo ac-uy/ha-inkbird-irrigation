@@ -36,6 +36,26 @@ PLATFORMS: list[Platform] = [
 ]
 
 
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old config entries to current version."""
+    _LOGGER.debug(
+        "Migrating config entry from version %s", config_entry.version
+    )
+
+    if config_entry.version == 1:
+        # v2 added device_model field; default to IIC-600 for existing setups
+        new_data = {**config_entry.data, CONF_DEVICE_MODEL: DeviceModel.IIC_600.value}
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, version=2
+        )
+        _LOGGER.info(
+            "Migrated config entry %s from v1 to v2 (added device_model=IIC-600)",
+            config_entry.title,
+        )
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Inkbird Irrigation from a config entry."""
     # Determine model — default to IIC-600 for backward compat with v1 entries
