@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -67,10 +68,9 @@ class InkbirdZoneSwitch(InkbirdEntity, SwitchEntity):
         model = self.coordinator.api.model
 
         if model == DeviceModel.IIC_600:
-            # The valve-status DPs are read-only and can remain True after the
-            # controller has stopped watering. The countdown DPs are cleared
-            # when irrigation ends, so they are the authoritative state source.
-            return device.zone_countdown.get(self._zone, 0) > 0
+            # DP 110 is the controller's active-zone bitmask and clears when
+            # the valve closes. Countdown DPs can linger after watering stops.
+            return bool(device.active_zone & (1 << (self._zone - 1)))
         elif model == DeviceModel.IIC_800:
             # Use bitmask from DP 107
             return device.zone_active.get(self._zone, False)
@@ -83,24 +83,32 @@ class InkbirdZoneSwitch(InkbirdEntity, SwitchEntity):
         entry_id = self.coordinator.entry.entry_id
         duration = _zone_durations.get(entry_id, {}).get(self._zone, 30)
         _LOGGER.debug("Zone %d turn_on with duration=%d", self._zone, duration)
-        await self.hass.async_add_executor_job(
+        success = await self.hass.async_add_executor_job(
             self.coordinator.api.turn_on_zone, self._zone, duration
         )
-        # Optimistic update
-        self.coordinator.api.device.zone_active[self._zone] = True
-        self.coordinator.api.device.zone_countdown[self._zone] = duration
-        self.coordinator.async_set_updated_data(self.coordinator.api.device)
+        if not success:
+            raise HomeAssistantError(f"Failed to start Zone {self._zone}")
+        # Optimistic update after the controller accepts the command.
+        device = self.coordinator.api.device
+        device.zone_active[self._zone] = True
+        device.zone_countdown[self._zone] = duration
+        device.active_zone |= 1 << (self._zone - 1)
+        self.coordinator.async_set_updated_data(device)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Close the zone valve."""
-        await self.hass.async_add_executor_job(
+        success = await self.hass.async_add_executor_job(
             self.coordinator.api.turn_off_zone, self._zone
         )
-        # Optimistic update
-        self.coordinator.api.device.zone_active[self._zone] = False
-        self.coordinator.api.device.zone_countdown[self._zone] = 0
-        self.coordinator.async_set_updated_data(self.coordinator.api.device)
+        if not success:
+            raise HomeAssistantError(f"Failed to stop Zone {self._zone}")
+        # Optimistic update after the controller accepts the command.
+        device = self.coordinator.api.device
+        device.zone_active[self._zone] = False
+        device.zone_countdown[self._zone] = 0
+        device.active_zone &= ~(1 << (self._zone - 1))
+        self.coordinator.async_set_updated_data(device)
         await self.coordinator.async_request_refresh()
 
 

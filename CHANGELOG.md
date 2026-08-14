@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-08-14
+
+### Fixed
+- Use the IIC-600 active-zone bitmask as the authoritative valve state, preventing a lingering countdown from leaving a stopped zone shown as on.
+- Send IIC-600 manual-start duration and active-zone bitmask as one atomic command, preventing the controller from applying an unintended run duration.
+- Apply optimistic zone state only after the controller accepts the start or stop command.
+- Reject empty local status snapshots and rebuild the IIC-600 active-zone bitmask from fresh valve states when cloud fallback cannot return DP 110, preventing stale optimistic state from persisting.
+- Poll the IIC-600 using fresh non-persistent Tuya status queries, avoiding stale queued frames from a long-lived socket.
+
 ## [0.7.2] - 2026-08-14
 
 ### Fixed

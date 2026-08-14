@@ -88,6 +88,9 @@ class InkbirdDevice:
 
     def _update_iic600(self, dps: dict[str, Any]) -> None:
         """Parse DPs for IIC-600."""
+        active_zone_dp = str(DP_ACTIVE_ZONE)
+        active_zone_received = active_zone_dp in dps
+
         for zone in range(1, self.profile.num_zones + 1):
             dp_switch = str(self.profile.dp_zone_switch[zone])
             dp_countdown = str(self.profile.dp_zone_countdown[zone])
@@ -99,6 +102,20 @@ class InkbirdDevice:
                 self.zone_countdown[zone] = int(dps[dp_countdown])
             if dp_elapsed in dps:
                 self.zone_duration[zone] = int(dps[dp_elapsed])
+
+        if active_zone_received:
+            self.active_zone = int(dps[active_zone_dp])
+        elif any(
+            str(self.profile.dp_zone_switch[zone]) in dps
+            for zone in range(1, self.profile.num_zones + 1)
+        ):
+            # Cloud fallback does not expose DP 110. Rebuild its state from
+            # fresh per-zone valve switches so an old optimistic bit cannot linger.
+            self.active_zone = sum(
+                1 << (zone - 1)
+                for zone, is_active in self.zone_active.items()
+                if is_active
+            )
 
         if str(DP_SYSTEM_POWER) in dps:
             self.system_power = dps[str(DP_SYSTEM_POWER)]
@@ -230,7 +247,8 @@ class InkbirdAPI:
     """Local Tuya API client for Inkbird irrigation controllers.
 
     Supports IIC-600 and IIC-800 via device profiles.
-    Uses a persistent socket connection to reduce session churn.
+    Uses a fresh local status query for each poll to prevent stale frames from
+    a persistent Tuya socket being presented as current controller state.
     Optionally falls back to Tuya Cloud API when local is unavailable.
     """
 
@@ -308,12 +326,14 @@ class InkbirdAPI:
             ver = version if version is not None else self._profile.tuya_version
             self._tuya = tinytuya.Device(self._device_id, self._device_ip, self._local_key)
             self._tuya.set_version(ver)
-            self._tuya.set_socketPersistent(True)
+            # Coordinator polls must use fresh responses. A persistent Tuya
+            # socket can return a queued frame from an earlier controller state.
+            self._tuya.set_socketPersistent(False)
             self._tuya.set_socketTimeout(5)
             self._connected = True
             self._fail_count = 0
             _LOGGER.debug(
-                "Persistent connection established to %s (protocol v%.1f)",
+                "Local connection prepared for %s (protocol v%.1f)",
                 self._device_ip, ver,
             )
             return self._tuya
@@ -437,12 +457,14 @@ class InkbirdAPI:
             try:
                 d = self._ensure_connection()
                 if d:
-                    d.updatedps()
-                    time.sleep(0.5)
+                    # Use a complete DP query on a non-persistent socket.
+                    # `updatedps()` targets only a selected DP and can leave a
+                    # queued persistent-socket frame to be read as this poll.
                     status = d.status()
-                    if status and "dps" in status:
+                    dps = status.get("dps") if status else None
+                    if isinstance(dps, dict) and dps:
                         self.device.online = True
-                        self.device.update_from_dps(status["dps"])
+                        self.device.update_from_dps(dps)
                         self._fail_count = 0
                         return True
                     self._fail_count += 1
@@ -470,11 +492,12 @@ class InkbirdAPI:
                         d = self._ensure_connection()
                         if d:
                             status = d.status()
-                            if status and "dps" in status:
+                            dps = status.get("dps") if status else None
+                            if isinstance(dps, dict) and dps:
                                 _LOGGER.info("Local connection recovered")
                                 self._using_cloud = False
                                 self._fail_count = 0
-                                self.device.update_from_dps(status["dps"])
+                                self.device.update_from_dps(dps)
                     except Exception:  # noqa: BLE001
                         pass
                 self._fail_count += 1
@@ -573,16 +596,27 @@ class InkbirdAPI:
     # ─── IIC-600 Zone Control ──────────────────────────────────────────────────
 
     def _turn_on_zone_600(self, zone: int, duration_minutes: int) -> bool:
-        """Start a zone on IIC-600 by writing its countdown DP."""
+        """Start an IIC-600 zone with an atomic duration-and-zone command."""
         if self._using_cloud and self._has_cloud:
             return self._cloud_turn_on_600(zone, duration_minutes)
         try:
             d = self._ensure_connection()
             if d:
                 dp_countdown = DP_ZONE_COUNTDOWN[zone]
-                d.set_value(dp_countdown, duration_minutes)
+                payload = d.generate_payload(
+                    tinytuya.CONTROL,
+                    {
+                        str(dp_countdown): duration_minutes,
+                        str(DP_ACTIVE_ZONE): 1 << (zone - 1),
+                    },
+                )
+                d.send(payload)
                 _LOGGER.debug(
-                    "Zone %d ON for %d min (local) dp=%d", zone, duration_minutes, dp_countdown
+                    "Zone %d ON for %d min (local) dp=%d, active_bitmask=%d",
+                    zone,
+                    duration_minutes,
+                    dp_countdown,
+                    1 << (zone - 1),
                 )
                 time.sleep(1)
                 return True
