@@ -67,9 +67,10 @@ class InkbirdZoneSwitch(InkbirdEntity, SwitchEntity):
         model = self.coordinator.api.model
 
         if model == DeviceModel.IIC_600:
-            countdown = device.zone_countdown.get(self._zone, 0)
-            switch_state = device.zone_active.get(self._zone, False)
-            return switch_state or countdown > 0
+            # The valve-status DPs are read-only and can remain True after the
+            # controller has stopped watering. The countdown DPs are cleared
+            # when irrigation ends, so they are the authoritative state source.
+            return device.zone_countdown.get(self._zone, 0) > 0
         elif model == DeviceModel.IIC_800:
             # Use bitmask from DP 107
             return device.zone_active.get(self._zone, False)
