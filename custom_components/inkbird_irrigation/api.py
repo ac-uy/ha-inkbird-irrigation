@@ -6,6 +6,7 @@ Supports IIC-600 and IIC-800 models via device profiles.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -247,9 +248,10 @@ class InkbirdAPI:
     """Local Tuya API client for Inkbird irrigation controllers.
 
     Supports IIC-600 and IIC-800 via device profiles.
-    Uses a fresh local status query for each poll to prevent stale frames from
-    a persistent Tuya socket being presented as current controller state.
-    Optionally falls back to Tuya Cloud API when local is unavailable.
+    Uses a persistent local Tuya session: it reads one full state snapshot
+    during connection, then consumes state-change pushes and heartbeats instead
+    of polling full status. Optionally falls back to Tuya Cloud API when local
+    is unavailable.
     """
 
     def __init__(
@@ -274,6 +276,9 @@ class InkbirdAPI:
         self._fail_count = 0
         self._using_cloud = False
         self._command_lock = False
+        self._io_lock = threading.RLock()
+        self._last_heartbeat = 0.0
+        self._heartbeat_interval = 30.0
 
         # Resolve model
         if isinstance(device_model, str):
@@ -326,9 +331,10 @@ class InkbirdAPI:
             ver = version if version is not None else self._profile.tuya_version
             self._tuya = tinytuya.Device(self._device_id, self._device_ip, self._local_key)
             self._tuya.set_version(ver)
-            # Coordinator polls must use fresh responses. A persistent Tuya
-            # socket can return a queued frame from an earlier controller state.
-            self._tuya.set_socketPersistent(False)
+            # Keep one local session. Reopening the controller connection every
+            # 15 seconds can make an IIC-600 stop accepting local requests.
+            # Each poll still uses a complete status query.
+            self._tuya.set_socketPersistent(True)
             self._tuya.set_socketTimeout(5)
             self._connected = True
             self._fail_count = 0
@@ -381,11 +387,15 @@ class InkbirdAPI:
         return None
 
     def connect(self) -> bool:
-        """Initialize the Tuya device connection and auto-detect model if needed.
+        """Connect and fetch one complete initial controller snapshot."""
+        with self._io_lock:
+            return self._connect()
 
-        Tries the configured protocol version first. If no DPs are returned,
-        retries with alternative protocol versions (3.3, 3.4, 3.5) to handle
-        devices that use a different Tuya protocol than expected.
+    def _connect(self) -> bool:
+        """Initialize the Tuya connection and auto-detect the device profile.
+
+        Tries the configured protocol version first, then alternatives when no
+        data points are returned.
         """
         # Protocol versions to try: configured version first, then alternatives
         configured_ver = self._profile.tuya_version
@@ -452,69 +462,88 @@ class InkbirdAPI:
         return False
 
     def update(self) -> bool:
-        """Poll the device for current state. Falls back to cloud if local fails."""
-        if not self._using_cloud:
-            try:
-                d = self._ensure_connection()
-                if d:
-                    # Use a complete DP query on a non-persistent socket.
-                    # `updatedps()` targets only a selected DP and can leave a
-                    # queued persistent-socket frame to be read as this poll.
-                    status = d.status()
-                    dps = status.get("dps") if status else None
-                    if isinstance(dps, dict) and dps:
-                        self.device.online = True
-                        self.device.update_from_dps(dps)
-                        self._fail_count = 0
-                        return True
-                    self._fail_count += 1
-                else:
-                    self._fail_count += 1
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.debug("Local update failed: %s", exc)
-                self._fail_count += 1
-
-            if self._fail_count >= 3:
-                self._reset_connection()
-
-            if self._has_cloud and self._fail_count >= 2:
-                _LOGGER.warning(
-                    "Local connection failed %d times, falling back to cloud API",
-                    self._fail_count,
-                )
-                self._using_cloud = True
-
+        """Return the cached listener state without issuing a status query."""
+        if self.device.online:
+            return True
         if self._using_cloud and self._has_cloud:
-            if self._cloud_update():
-                if self._fail_count % 20 == 0:
-                    self._reset_connection()
-                    try:
-                        d = self._ensure_connection()
-                        if d:
-                            status = d.status()
-                            dps = status.get("dps") if status else None
-                            if isinstance(dps, dict) and dps:
-                                _LOGGER.info("Local connection recovered")
-                                self._using_cloud = False
-                                self._fail_count = 0
-                                self.device.update_from_dps(dps)
-                    except Exception:  # noqa: BLE001
-                        pass
-                self._fail_count += 1
-                return True
-
-        self.device.online = False
+            return self._cloud_update()
         return False
+
+    def receive_push_update(self) -> bool:
+        """Read one unsolicited local update from the persistent Tuya socket.
+
+        The controller can send partial DP updates at any time. They must be
+        consumed independently of commands; calling ``status()`` here can read
+        an earlier pushed frame as though it were a new query response.
+        """
+        with self._io_lock:
+            if not self._tuya or not self._connected:
+                return False
+
+            try:
+                response = self._tuya.receive()
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug("Local push receive failed: %s", exc)
+                self._reset_connection()
+                self.device.online = False
+                return False
+
+            if not response:
+                now = time.monotonic()
+                if now - self._last_heartbeat >= self._heartbeat_interval:
+                    try:
+                        self._tuya.heartbeat()
+                        self._last_heartbeat = now
+                    except Exception as exc:  # noqa: BLE001
+                        _LOGGER.debug("Local heartbeat failed: %s", exc)
+                        self._reset_connection()
+                        self.device.online = False
+                return False
+
+            if not isinstance(response, dict):
+                return False
+            if "Err" in response:
+                _LOGGER.debug("Local push receive returned Tuya error %s", response["Err"])
+                self._reset_connection()
+                self.device.online = False
+                return False
+
+            dps = response.get("dps")
+            if not isinstance(dps, dict) or not dps:
+                return False
+
+            self.device.online = True
+            self.device.update_from_dps(dps)
+            return True
+
+    def close(self) -> None:
+        """Close the local listener socket during integration unload."""
+        with self._io_lock:
+            self._reset_connection()
+            self.device.online = False
 
 
     def _cloud_update(self) -> bool:
         """Poll device via cloud API (fallback)."""
         cloud = self._get_cloud()
         if not cloud:
+            _LOGGER.warning("Tuya cloud fallback is unavailable: client was not created")
             return False
         try:
             status = cloud.getstatus(self._device_id)
-            if not status or not status.get("success") or not status.get("result"):
+            if not status:
+                _LOGGER.warning("Tuya cloud status request returned no response")
+                return False
+            if not status.get("success"):
+                message = str(status.get("msg", "unknown"))[:200]
+                _LOGGER.warning(
+                    "Tuya cloud status request was unsuccessful (code=%s, message=%s)",
+                    status.get("code", "unknown"),
+                    message,
+                )
+                return False
+            if not status.get("result"):
+                _LOGGER.warning("Tuya cloud status request returned an empty result")
                 return False
 
             dps: dict[str, Any] = {}
@@ -566,6 +595,9 @@ class InkbirdAPI:
                 return True
             return False
         except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning(
+                "Tuya cloud status request raised %s", type(exc).__name__
+            )
             _LOGGER.debug("Cloud update failed: %s", exc)
             return False
 
@@ -753,6 +785,11 @@ class InkbirdAPI:
         return False
 
     def turn_on_zone_800_multi(self, durations: dict[int, int]) -> bool:
+        """Start multiple IIC-800 zones while serializing local socket access."""
+        with self._io_lock:
+            return self._turn_on_zone_800_multi(durations)
+
+    def _turn_on_zone_800_multi(self, durations: dict[int, int]) -> bool:
         """Start multiple zones on IIC-800 with individual durations.
 
         Sends DP 45 as a 34-byte payload (command=start, target=specific,
@@ -802,6 +839,11 @@ class InkbirdAPI:
     # ─── Public dispatchers ────────────────────────────────────────────────────
 
     def turn_on_zone(self, zone: int, duration_minutes: int = 30) -> bool:
+        """Turn on a zone while serializing access to the local socket."""
+        with self._io_lock:
+            return self._turn_on_zone(zone, duration_minutes)
+
+    def _turn_on_zone(self, zone: int, duration_minutes: int = 30) -> bool:
         """Turn on a zone for the specified duration."""
         if zone < 1 or zone > self._profile.num_zones:
             return False
@@ -814,6 +856,11 @@ class InkbirdAPI:
         return False
 
     def turn_off_zone(self, zone: int) -> bool:
+        """Turn off a zone while serializing access to the local socket."""
+        with self._io_lock:
+            return self._turn_off_zone(zone)
+
+    def _turn_off_zone(self, zone: int) -> bool:
         """Turn off a zone."""
         if zone < 1 or zone > self._profile.num_zones:
             return False
@@ -826,6 +873,11 @@ class InkbirdAPI:
         return False
 
     def set_zone_duration(self, zone: int, duration_minutes: int) -> bool:
+        """Set a zone duration while serializing access to the local socket."""
+        with self._io_lock:
+            return self._set_zone_duration(zone, duration_minutes)
+
+    def _set_zone_duration(self, zone: int, duration_minutes: int) -> bool:
         """Set the default duration for a zone (IIC-600 only, no-op for 800)."""
         if self._model == DeviceModel.IIC_800:
             # IIC-800 uses DP 45 (raw), duration is set at start time
@@ -845,6 +897,11 @@ class InkbirdAPI:
             return False
 
     def set_dp(self, dp: int, value: Any) -> bool:
+        """Set a DP while serializing access to the local socket."""
+        with self._io_lock:
+            return self._set_dp(dp, value)
+
+    def _set_dp(self, dp: int, value: Any) -> bool:
         """Set a single data point value."""
         try:
             d = self._ensure_connection()

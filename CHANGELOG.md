@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-08-15
+
+### Fixed
+- Replace 15-second full-status polling with one persistent local Tuya listener. The controller now sends pushed DP updates for state changes, avoiding both stale queued frames and repeated reconnects that can make an IIC-600 stop accepting local requests.
+
 ## [0.7.3] - 2026-08-14
 
 ### Fixed

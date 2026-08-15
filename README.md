@@ -160,7 +160,7 @@ automation:
 
 - **Protocol**: Tuya local protocol v3.4
 - **Communication**: Direct LAN (UDP/TCP on device IP)
-- **Polling interval**: 15 seconds, using a fresh local status query for current valve state
+- **Polling interval**: Event-driven local updates over one persistent Tuya session, with heartbeats and reconnects only after a real socket failure
 - **No cloud dependency**: Works entirely on your local network
 - **Zones**: Sequential only — one zone runs at a time (hardware limitation)
 - **Duration**: 1-180 minutes per zone, configurable via number entity

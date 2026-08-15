@@ -97,12 +97,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await coordinator.async_start_listener()
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload an Inkbird Irrigation config entry."""
+    coordinator: InkbirdCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator:
+        await coordinator.async_stop_listener()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
