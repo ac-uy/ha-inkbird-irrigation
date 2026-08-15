@@ -14,13 +14,41 @@
           "cloud_api_secret": "Cloud API Secret (optional)",
           "cloud_api_region": "Cloud API Region (optional)"
         }
+      },
+      "reconfigure": {
+        "title": "Update Inkbird connection",
+        "description": "Choose which connection details to update. Each option is verified before it is saved.",
+        "menu_options": {
+          "reconfigure_local": "Local connection (Local Key or IP address)",
+          "reconfigure_cloud": "Tuya Cloud API credentials"
+        }
+      },
+      "reconfigure_local": {
+        "title": "Update local connection",
+        "description": "Enter the current Local Key and controller IP address. The integration temporarily stops its active local listener, performs one read-only status check, then saves and reloads only after verification.",
+        "data": {
+          "local_key": "Local Key",
+          "device_ip": "Device IP address"
+        }
+      },
+      "reconfigure_cloud": {
+        "title": "Update Tuya Cloud API credentials",
+        "description": "The supplied credentials are verified with a read-only cloud status request before saving and reloading.",
+        "data": {
+          "cloud_api_key": "Cloud API Key",
+          "cloud_api_secret": "Cloud API Secret",
+          "cloud_api_region": "Cloud API Region"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to device. Check IP, Device ID, and Local Key. If you have LocalTuya configured for this device, remove those entities first — only one local connection is allowed at a time."
+      "cannot_connect": "Cannot connect to device. Check IP, Device ID, and Local Key. If you have LocalTuya configured for this device, remove those entities first — only one local connection is allowed at a time.",
+      "cannot_connect_local": "Cannot verify the local connection. Check the Local Key and IP address, then try again. The existing configuration was not changed.",
+      "cannot_prepare_local": "Cannot safely stop the active local connection for verification. The existing configuration was not changed."
     },
     "abort": {
-      "already_configured": "This device is already configured."
+      "already_configured": "This device is already configured.",
+      "reconfigure_successful": "Connection details were verified, saved, and the integration was reloaded."
     }
   }
 }

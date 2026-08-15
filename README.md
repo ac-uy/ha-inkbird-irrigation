@@ -84,7 +84,12 @@ Before installing this integration, you need your device's **Local Key** from th
 3. Enter your device credentials (Device ID, Local Key, IP address)
 4. Click **Submit**
 
-To replace the optional Tuya Cloud credentials later, open the integration’s **Configure** action. The reconfigure flow verifies the supplied Cloud credentials with a read-only device-status request before saving them; it does not require deleting or recreating the integration.
+To update connection credentials later, open the integration’s **Configure** action and choose one of two independently verified paths:
+
+- **Local connection** — use this when normal local access is unavailable after a Local Key change or IP-address change. The integration briefly stops its own local listener, performs one read-only local status request, then saves and reloads with the new values only after verification.
+- **Tuya Cloud API credentials** — enter the Cloud Access ID, Access Secret, and region. The integration verifies them with a read-only cloud-status request before saving and reloading.
+
+A failed Local verification restores the prior listener with the unchanged configuration. Neither path sends an irrigation command or requires deleting and recreating the integration.
 
 ## Entities Created
 

@@ -111,7 +111,78 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Replace Tuya Cloud credentials without recreating the integration."""
+        """Offer safe, separately validated connection reconfiguration paths."""
+        return self.async_show_menu(
+            step_id="reconfigure",
+            menu_options=["reconfigure_local", "reconfigure_cloud"],
+        )
+
+    async def async_step_reconfigure_local(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Replace Local Key or IP after a read-only local status verification."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            # The controller accepts only one local persistent connection. Unload
+            # the active listener before opening the temporary read-only session.
+            # If validation fails, reload the unchanged entry to restore it.
+            was_loaded = entry.entry_id in self.hass.data.get(DOMAIN, {})
+            if was_loaded and not await self.hass.config_entries.async_unload(
+                entry.entry_id
+            ):
+                errors["base"] = "cannot_prepare_local"
+            else:
+                model_str = entry.data.get(CONF_DEVICE_MODEL, DeviceModel.IIC_600.value)
+                try:
+                    device_model = DeviceModel(model_str)
+                except ValueError:
+                    device_model = DeviceModel.IIC_600
+
+                api = InkbirdAPI(
+                    entry.data[CONF_DEVICE_ID],
+                    user_input[CONF_LOCAL_KEY],
+                    user_input[CONF_DEVICE_IP],
+                    device_model=device_model,
+                )
+                try:
+                    connected = await self.hass.async_add_executor_job(api.connect)
+                finally:
+                    await self.hass.async_add_executor_job(api.close)
+
+                if connected:
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates={
+                            CONF_LOCAL_KEY: user_input[CONF_LOCAL_KEY],
+                            CONF_DEVICE_IP: user_input[CONF_DEVICE_IP],
+                            CONF_DEVICE_MODEL: api.model.value,
+                        },
+                        reason="reconfigure_successful",
+                    )
+
+                if was_loaded:
+                    await self.hass.config_entries.async_reload(entry.entry_id)
+                errors["base"] = "cannot_connect_local"
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_LOCAL_KEY): str,
+                vol.Required(
+                    CONF_DEVICE_IP,
+                    default=entry.data.get(CONF_DEVICE_IP, ""),
+                ): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure_local", data_schema=schema, errors=errors
+        )
+
+    async def async_step_reconfigure_cloud(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Replace Tuya Cloud credentials after a read-only cloud-status verification."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
 
@@ -133,16 +204,15 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             cloud_ok = await self.hass.async_add_executor_job(api._cloud_update)
             if cloud_ok:
-                self.hass.config_entries.async_update_entry(
+                return self.async_update_reload_and_abort(
                     entry,
-                    data={
-                        **entry.data,
+                    data_updates={
                         CONF_CLOUD_API_KEY: user_input[CONF_CLOUD_API_KEY],
                         CONF_CLOUD_API_SECRET: user_input[CONF_CLOUD_API_SECRET],
                         CONF_CLOUD_API_REGION: user_input[CONF_CLOUD_API_REGION],
                     },
+                    reason="reconfigure_successful",
                 )
-                return self.async_abort(reason="reconfigure_successful")
             errors["base"] = "cannot_connect"
 
         schema = vol.Schema(
@@ -159,5 +229,5 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(
-            step_id="reconfigure", data_schema=schema, errors=errors
+            step_id="reconfigure_cloud", data_schema=schema, errors=errors
         )

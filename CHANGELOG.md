@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-08-15
+
+### Added
+- Add a validated Local connection reconfigure path for updating the Local Key or controller IP without deleting and recreating the integration.
+
+### Changed
+- Split the Configure flow into independently verified Local connection and Tuya Cloud API credential paths; both reload the integration only after saving verified values.
+- Temporarily unload the active local listener before Local Key/IP validation, preventing a second local Tuya session from conflicting with the controller; failed validation restores the unchanged integration.
+
 ## [0.7.5] - 2026-08-15
 
 ### Added
