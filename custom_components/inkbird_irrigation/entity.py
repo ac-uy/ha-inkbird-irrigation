@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -18,6 +19,17 @@ class InkbirdEntity(CoordinatorEntity[InkbirdCoordinator]):
     def __init__(self, coordinator: InkbirdCoordinator) -> None:
         super().__init__(coordinator)
         self._device_id = coordinator.entry.data["device_id"]
+
+    async def async_set_dp(self, dp: int, value: object) -> None:
+        """Set a controller data point and surface transport failures to HA."""
+        success = await self.hass.async_add_executor_job(
+            self.coordinator.api.set_dp, dp, value
+        )
+        if not success:
+            raise HomeAssistantError(
+                f"Controller cannot set DP {dp} using the active connection mode"
+            )
+        await self.coordinator.async_request_refresh()
 
     @property
     def device_info(self) -> DeviceInfo:

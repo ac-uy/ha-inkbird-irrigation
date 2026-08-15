@@ -104,7 +104,4 @@ class InkbirdSeasonalAdjust(InkbirdEntity, NumberEntity):
         """Set the seasonal adjustment."""
         dp = self.coordinator.api.profile.dp_seasonal_adjust
         if dp is not None:
-            await self.hass.async_add_executor_job(
-                self.coordinator.api.set_dp, dp, int(value)
-            )
-            await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, int(value))

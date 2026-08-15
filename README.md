@@ -17,7 +17,8 @@ A custom Home Assistant integration for the **Inkbird IIC-600-WIFI** smart irrig
 - 🔄 **Auto-recovery** — switches back to local when connection restores
 - 🌧️ **Rain sensor status** — see if rain sensor is enabled
 - 🔄 **Sequential zones** — queue multiple zones, they run one at a time (hardware behavior)
-- 📡 **Connection mode sensor** — shows whether running on local or cloud
+- 📡 **Connection selector** — choose Auto, Local only, or Cloud only
+- 📡 **Connection mode sensor** — shows the transport currently serving state
 
 ## Supported Models
 
@@ -83,6 +84,8 @@ Before installing this integration, you need your device's **Local Key** from th
 3. Enter your device credentials (Device ID, Local Key, IP address)
 4. Click **Submit**
 
+To replace the optional Tuya Cloud credentials later, open the integration’s **Configure** action. The reconfigure flow verifies the supplied Cloud credentials with a read-only device-status request before saving them; it does not require deleting or recreating the integration.
+
 ## Entities Created
 
 | Entity | Type | Description |
@@ -95,24 +98,33 @@ Before installing this integration, you need your device's **Local Key** from th
 | `sensor.inkbird_iic_600_zone_1_time_remaining` - `zone_6` | Sensor | Countdown (minutes remaining) |
 | `sensor.inkbird_iic_600_zone_1_time_elapsed` - `zone_6` | Sensor | Elapsed time (minutes running) |
 | `sensor.inkbird_iic_600_mode` | Sensor | Operating mode (auto/manual) |
-| `sensor.inkbird_iic_600_connection_mode` | Sensor | Connection mode (local/cloud) |
+| `select.inkbird_iic_600_connection_preference` | Select | Requested transport: Auto, Local, or Cloud |
+| `sensor.inkbird_iic_600_connection_mode` | Sensor | Active transport (`local`, `cloud`, or `unavailable`) |
 
-## Cloud Fallback (Optional)
+## Connection Modes and Cloud Fallback (Optional)
 
-The device's local Tuya protocol can occasionally become unresponsive (error 914). To prevent the integration from going unavailable, you can provide optional Tuya Cloud API credentials during setup.
+The integration keeps one persistent local Tuya session for event-driven updates. Optional Tuya Cloud credentials add a **Connection preference** selector:
 
-**How it works:**
-1. Integration uses local connection (fastest, ~50ms)
-2. If local fails 2 consecutive times → automatically switches to cloud API (~300ms)
-3. Periodically retries local in the background
-4. When local recovers → switches back automatically
+- **Auto** (default): use the local listener when it is available. If its socket fails, verify cloud status and switch to bounded cloud polling; retry local every five minutes and switch back only after a successful local connection.
+- **Local**: use only the local listener. The integration never sends a cloud command or polls cloud while this preference is selected.
+- **Cloud**: first verify a Tuya Cloud status response, then close the local socket and poll cloud once per minute. If verification fails, the current working transport and selector value are unchanged.
 
-**To enable cloud fallback**, provide these optional fields during setup:
+The **Connection mode** sensor reports the currently active transport and exposes the selected preference and cloud availability as attributes.
+
+**Cloud control coverage:** zone start/stop is supported. For IIC-600, main-valve and skip-schedule controls use the verified `water_control` and `control_skip` cloud codes. Controls without a confirmed cloud code are rejected in Cloud mode rather than silently issuing a local command.
+
+### Tuya Cloud API limitation and alternatives
+
+This integration's Cloud mode uses the Tuya IoT Core API. Tuya can expire its trial or paid IoT Core subscription, which prevents cloud status and control requests even when the controller remains online in the Inkbird app. When that happens, Cloud mode cannot be activated; Local mode remains fully independent and continues to work on the LAN.
+
+Home Assistant's built-in **Tuya** integration is a separate cloud option that uses Tuya's Device Sharing SDK with QR sign-in through the Tuya Smart or Smart Life app, rather than this integration's IoT Core API credentials. It creates separate cloud entities and is **not** an automatic fallback transport for Inkbird Irrigation. IIC-600 irrigation DP/entity coverage has not yet been verified, so inspect the entities it discovers before relying on it for state or control. Do not reset or re-pair a working controller solely to test it: re-pairing may change its Local Key and interrupt the local integration.
+
+To enable Auto fallback or Cloud mode, provide these optional setup fields:
 - **Cloud API Key** — from your Tuya IoT Platform project
-- **Cloud API Secret** — from your Tuya IoT Platform project  
+- **Cloud API Secret** — from your Tuya IoT Platform project
 - **Cloud API Region** — `eu`, `us`, `cn`, etc.
 
-Without cloud credentials, the integration works local-only (original behavior).
+Without cloud credentials, the integration remains local-only.
 
 ## Companion Card
 

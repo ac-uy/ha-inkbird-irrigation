@@ -78,7 +78,7 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             connected = await self.hass.async_add_executor_job(api.connect)
 
-            if not connected and api._has_cloud:
+            if not connected and api.has_cloud:
                 cloud_ok = await self.hass.async_add_executor_job(api._cloud_update)
                 if cloud_ok:
                     connected = True
@@ -105,4 +105,59 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
+        )
+
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Replace Tuya Cloud credentials without recreating the integration."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            model_str = entry.data.get(CONF_DEVICE_MODEL, DeviceModel.IIC_600.value)
+            try:
+                device_model = DeviceModel(model_str)
+            except ValueError:
+                device_model = DeviceModel.IIC_600
+
+            api = InkbirdAPI(
+                entry.data[CONF_DEVICE_ID],
+                entry.data[CONF_LOCAL_KEY],
+                entry.data[CONF_DEVICE_IP],
+                cloud_api_key=user_input[CONF_CLOUD_API_KEY],
+                cloud_api_secret=user_input[CONF_CLOUD_API_SECRET],
+                cloud_api_region=user_input[CONF_CLOUD_API_REGION],
+                device_model=device_model,
+            )
+            cloud_ok = await self.hass.async_add_executor_job(api._cloud_update)
+            if cloud_ok:
+                self.hass.config_entries.async_update_entry(
+                    entry,
+                    data={
+                        **entry.data,
+                        CONF_CLOUD_API_KEY: user_input[CONF_CLOUD_API_KEY],
+                        CONF_CLOUD_API_SECRET: user_input[CONF_CLOUD_API_SECRET],
+                        CONF_CLOUD_API_REGION: user_input[CONF_CLOUD_API_REGION],
+                    },
+                )
+                return self.async_abort(reason="reconfigure_successful")
+            errors["base"] = "cannot_connect"
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_CLOUD_API_KEY,
+                    default=entry.data.get(CONF_CLOUD_API_KEY, ""),
+                ): str,
+                vol.Required(CONF_CLOUD_API_SECRET): str,
+                vol.Required(
+                    CONF_CLOUD_API_REGION,
+                    default=entry.data.get(CONF_CLOUD_API_REGION, "eu"),
+                ): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=schema, errors=errors
         )

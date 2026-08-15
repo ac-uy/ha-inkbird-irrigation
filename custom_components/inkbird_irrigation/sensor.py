@@ -132,15 +132,17 @@ class InkbirdConnectionModeSensor(InkbirdEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        if self.coordinator.api._using_cloud:
-            return "cloud"
-        return "local"
+        """Return the transport currently serving integration state."""
+        return self.coordinator.api.active_transport
 
     @property
     def extra_state_attributes(self) -> dict:
+        """Expose the requested policy separately from the active transport."""
         return {
-            "fail_count": self.coordinator.api._fail_count,
-            "cloud_available": self.coordinator.api._has_cloud,
+            "selected_preference": self.coordinator.api.connection_preference,
+            "active_transport": self.coordinator.api.active_transport,
+            "fail_count": self.coordinator.api.fail_count,
+            "cloud_available": self.coordinator.api.has_cloud,
             "device_model": self.coordinator.api.model.value,
         }
 

@@ -13,6 +13,9 @@ from typing import Any
 import tinytuya
 
 from .const import (
+    CONNECTION_MODE_AUTO,
+    CONNECTION_MODE_CLOUD,
+    CONNECTION_MODES,
     DP_ACTIVE_ZONE,
     DP_AUTO_REMAINING,
     DP_MODE,
@@ -23,7 +26,6 @@ from .const import (
     DP_SKIP_SCHEDULE,
     DP_SYSTEM_POWER,
     DP_ZONE_COUNTDOWN,
-    DP_ZONE_DURATION,
     DP_ZONE_SWITCH,
 )
 from .models import (
@@ -263,6 +265,7 @@ class InkbirdAPI:
         cloud_api_secret: str = "",
         cloud_api_region: str = "eu",
         device_model: DeviceModel | str = DeviceModel.IIC_600,
+        connection_preference: str = CONNECTION_MODE_AUTO,
     ) -> None:
         self._device_id = device_id
         self._local_key = local_key
@@ -275,6 +278,11 @@ class InkbirdAPI:
         self._connected = False
         self._fail_count = 0
         self._using_cloud = False
+        self._connection_preference = (
+            connection_preference
+            if connection_preference in CONNECTION_MODES
+            else CONNECTION_MODE_AUTO
+        )
         self._command_lock = False
         self._io_lock = threading.RLock()
         self._last_heartbeat = 0.0
@@ -299,6 +307,65 @@ class InkbirdAPI:
     def profile(self) -> DeviceProfile:
         """Return the device profile."""
         return self._profile
+
+    @property
+    def has_cloud(self) -> bool:
+        """Return whether cloud credentials were configured."""
+        return self._has_cloud
+
+    @property
+    def connection_preference(self) -> str:
+        """Return the persisted transport policy."""
+        return self._connection_preference
+
+    @property
+    def active_transport(self) -> str:
+        """Return the transport currently serving controller state."""
+        if self._using_cloud:
+            return CONNECTION_MODE_CLOUD
+        if self._connected:
+            return "local"
+        return "unavailable"
+
+    @property
+    def fail_count(self) -> int:
+        """Return the local transport failure count for diagnostics."""
+        return self._fail_count
+
+    @property
+    def _can_fallback_to_cloud(self) -> bool:
+        """Return whether an automatic local-command fallback is permitted."""
+        return self._connection_preference == CONNECTION_MODE_AUTO and self._has_cloud
+
+    def set_connection_preference(self, preference: str) -> None:
+        """Set the in-memory policy after a transport transition succeeds."""
+        if preference not in CONNECTION_MODES:
+            raise ValueError(f"Unsupported connection preference: {preference}")
+        self._connection_preference = preference
+
+    def activate_local(self) -> bool:
+        """Verify and activate the persistent local transport."""
+        with self._io_lock:
+            if not self._connect():
+                return False
+            self._using_cloud = False
+            return True
+
+    def activate_cloud(self) -> bool:
+        """Verify cloud state before replacing an active local transport."""
+        with self._io_lock:
+            if not self._cloud_update():
+                return False
+            self._reset_connection()
+            self._using_cloud = True
+            return True
+
+    def poll_cloud(self) -> bool:
+        """Poll cloud state only while cloud is the active transport."""
+        with self._io_lock:
+            if not self._using_cloud:
+                return False
+            return self._cloud_update()
 
     @property
     def _has_cloud(self) -> bool:
@@ -441,6 +508,7 @@ class InkbirdAPI:
                 self._profile.tuya_version = successful_version
 
             self.device.online = True
+            self._using_cloud = False
             self.device.update_from_dps(dps)
             _LOGGER.debug(
                 "Connected to Inkbird %s at %s (protocol v%.1f)",
@@ -517,11 +585,11 @@ class InkbirdAPI:
             return True
 
     def close(self) -> None:
-        """Close the local listener socket during integration unload."""
+        """Close all transports during integration unload."""
         with self._io_lock:
             self._reset_connection()
+            self._using_cloud = False
             self.device.online = False
-
 
     def _cloud_update(self) -> bool:
         """Poll device via cloud API (fallback)."""
@@ -534,12 +602,27 @@ class InkbirdAPI:
             if not status:
                 _LOGGER.warning("Tuya cloud status request returned no response")
                 return False
-            if not status.get("success"):
-                message = str(status.get("msg", "unknown"))[:200]
+            if not isinstance(status, dict):
                 _LOGGER.warning(
-                    "Tuya cloud status request was unsuccessful (code=%s, message=%s)",
-                    status.get("code", "unknown"),
-                    message,
+                    "Tuya cloud status request returned an unexpected %s response",
+                    type(status).__name__,
+                )
+                return False
+            if not status.get("success"):
+                # TinyTuya returns token failures as {"Err", "Error", "Payload"},
+                # while the Tuya REST API normally uses {"code", "msg"}.
+                # Normalize both forms without logging credentials or device data.
+                code = status.get("code") or status.get("Err") or "unknown"
+                message = status.get("msg") or status.get("Error") or "unknown"
+                payload = status.get("Payload")
+                detail = f"; detail={payload}" if payload else ""
+                _LOGGER.warning(
+                    "Tuya cloud status request was unsuccessful "
+                    "(code=%s, message=%s%s, keys=%s)",
+                    str(code)[:80],
+                    str(message)[:200],
+                    str(detail)[:240],
+                    ",".join(sorted(str(key) for key in status))[:160],
                 )
                 return False
             if not status.get("result"):
@@ -655,7 +738,7 @@ class InkbirdAPI:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Local turn_on_zone failed: %s", exc)
             self._reset_connection()
-        if self._has_cloud:
+        if self._can_fallback_to_cloud:
             return self._cloud_turn_on_600(zone, duration_minutes)
         return False
 
@@ -690,7 +773,7 @@ class InkbirdAPI:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Local turn_off_zone failed: %s", exc)
             self._reset_connection()
-        if self._has_cloud:
+        if self._can_fallback_to_cloud:
             return self._cloud_command(f"switch_{zone}", False)
         return False
 
@@ -741,7 +824,7 @@ class InkbirdAPI:
             _LOGGER.debug("Local turn_on_zone (800) failed: %s", exc)
             self._reset_connection()
 
-        if self._has_cloud:
+        if self._can_fallback_to_cloud:
             return self._cloud_turn_on_800(zone, duration_minutes, raw_payload)
         return False
 
@@ -780,7 +863,7 @@ class InkbirdAPI:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Local turn_off (800) failed: %s", exc)
             self._reset_connection()
-        if self._has_cloud:
+        if self._can_fallback_to_cloud:
             return self._cloud_command("operation_mode", "OFF")
         return False
 
@@ -872,37 +955,57 @@ class InkbirdAPI:
             return self._turn_off_zone_800(zone)
         return False
 
+    def _cloud_code_for_dp(self, dp: int) -> str | None:
+        """Return a verified Tuya cloud code for a writable controller DP."""
+        if self._model == DeviceModel.IIC_600:
+            if dp in DP_ZONE_COUNTDOWN.values():
+                zone = next(zone for zone, countdown in DP_ZONE_COUNTDOWN.items() if countdown == dp)
+                return f"countdown_{zone}"
+            return {
+                DP_SYSTEM_POWER: "water_control",
+                DP_SKIP_SCHEDULE: "control_skip",
+            }.get(dp)
+
+        if self._model in (DeviceModel.IIC_400, DeviceModel.IIC_800):
+            return {
+                self._profile.dp_irrigation_mode: "irrigation_mode",
+                self._profile.dp_operation_mode: "operation_mode",
+                self._profile.dp_rain_sensor: "RainSen_TotalONOFF",
+                self._profile.dp_seasonal_adjust: "SeaAdjValue",
+                self._profile.dp_timeerror_alarm: "timeerror_alarm",
+                self._profile.dp_cancel_alarm_voice: "cancel_timealarm_voice",
+            }.get(dp)
+        return None
+
     def set_zone_duration(self, zone: int, duration_minutes: int) -> bool:
-        """Set a zone duration while serializing access to the local socket."""
+        """Set an IIC-600 zone countdown through the active transport."""
         with self._io_lock:
             return self._set_zone_duration(zone, duration_minutes)
 
     def _set_zone_duration(self, zone: int, duration_minutes: int) -> bool:
-        """Set the default duration for a zone (IIC-600 only, no-op for 800)."""
+        """Set the next IIC-600 countdown value; IIC-800 stores it in DP 45 at start."""
         if self._model == DeviceModel.IIC_800:
-            # IIC-800 uses DP 45 (raw), duration is set at start time
             return True
         if zone < 1 or zone > self._profile.num_zones:
             return False
-        try:
-            d = self._ensure_connection()
-            if not d:
-                return False
-            dp_duration = DP_ZONE_DURATION[zone]
-            d.set_value(dp_duration, duration_minutes)
-            return True
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("Failed to set duration for zone %d: %s", zone, exc)
-            self._reset_connection()
-            return False
+        return self._set_dp(DP_ZONE_COUNTDOWN[zone], duration_minutes)
 
     def set_dp(self, dp: int, value: Any) -> bool:
-        """Set a DP while serializing access to the local socket."""
+        """Set a DP through the active transport."""
         with self._io_lock:
             return self._set_dp(dp, value)
 
     def _set_dp(self, dp: int, value: Any) -> bool:
-        """Set a single data point value."""
+        """Set one DP locally, or use a verified cloud-code mapping in Cloud mode."""
+        if self._using_cloud:
+            code = self._cloud_code_for_dp(dp)
+            if code is None:
+                _LOGGER.warning(
+                    "DP %d is not supported in Cloud mode; no local command was sent", dp
+                )
+                return False
+            return self._cloud_command(code, value)
+
         try:
             d = self._ensure_connection()
             if not d:

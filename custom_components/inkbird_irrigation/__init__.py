@@ -17,6 +17,10 @@ from .const import (
     CONF_CLOUD_API_KEY,
     CONF_CLOUD_API_REGION,
     CONF_CLOUD_API_SECRET,
+    CONF_CONNECTION_MODE,
+    CONNECTION_MODE_AUTO,
+    CONNECTION_MODE_CLOUD,
+    CONNECTION_MODE_LOCAL,
     CONF_DEVICE_ID,
     CONF_DEVICE_IP,
     CONF_DEVICE_MODEL,
@@ -33,6 +37,7 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.SENSOR,
     Platform.NUMBER,
+    Platform.SELECT,
 ]
 
 
@@ -65,6 +70,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except ValueError:
         device_model = DeviceModel.IIC_600
 
+    preference = entry.options.get(CONF_CONNECTION_MODE, CONNECTION_MODE_AUTO)
+    if preference not in {
+        CONNECTION_MODE_AUTO,
+        CONNECTION_MODE_CLOUD,
+        CONNECTION_MODE_LOCAL,
+    }:
+        preference = CONNECTION_MODE_AUTO
+
     api = InkbirdAPI(
         entry.data[CONF_DEVICE_ID],
         entry.data[CONF_LOCAL_KEY],
@@ -73,23 +86,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cloud_api_secret=entry.data.get(CONF_CLOUD_API_SECRET, ""),
         cloud_api_region=entry.data.get(CONF_CLOUD_API_REGION, "eu"),
         device_model=device_model,
+        connection_preference=preference,
     )
 
-    connected = await hass.async_add_executor_job(api.connect)
+    if preference == CONNECTION_MODE_CLOUD:
+        connected = await hass.async_add_executor_job(api.activate_cloud)
+        connection_description = "cloud"
+    else:
+        connected = await hass.async_add_executor_job(api.activate_local)
+        connection_description = "local"
+        if (
+            not connected
+            and preference == CONNECTION_MODE_AUTO
+            and api.has_cloud
+        ):
+            connected = await hass.async_add_executor_job(api.activate_cloud)
+            connection_description = "cloud"
+
     if not connected:
-        if api._has_cloud:
-            cloud_ok = await hass.async_add_executor_job(api._cloud_update)
-            if not cloud_ok:
-                raise ConfigEntryNotReady(
-                    f"Cannot connect to Inkbird {api.model.value} "
-                    "(local and cloud both failed)"
-                )
-            _LOGGER.warning("Local connection failed, starting with cloud fallback")
-            api._using_cloud = True
-        else:
+        if preference == CONNECTION_MODE_CLOUD:
             raise ConfigEntryNotReady(
-                f"Cannot connect to Inkbird {api.model.value}"
+                f"Cannot connect to Inkbird {api.model.value} through Tuya Cloud"
             )
+        if preference == CONNECTION_MODE_LOCAL:
+            raise ConfigEntryNotReady(
+                f"Cannot connect to Inkbird {api.model.value} locally"
+            )
+        raise ConfigEntryNotReady(
+            f"Cannot connect to Inkbird {api.model.value} (local and cloud both failed)"
+        )
+
+    _LOGGER.info("Starting Inkbird %s using %s transport", api.model.value, connection_description)
 
     coordinator = InkbirdCoordinator(hass, api, entry)
     await coordinator.async_config_entry_first_refresh()

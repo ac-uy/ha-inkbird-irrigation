@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-08-15
+
+### Added
+- Add a persistent Connection preference selector with Auto, Local, and Cloud modes. Auto prefers the event-driven local listener, falls back to verified cloud polling when local access fails, and periodically retries local.
+- Add an integration reconfigure flow for replacing Tuya Cloud credentials after a read-only cloud-status verification, avoiding integration deletion and recreation.
+- Document the Tuya IoT Core subscription limitation and the separate Home Assistant Tuya Device Sharing integration as an unverified cloud alternative.
+
+### Changed
+- Keep the Connection mode sensor as the active transport indicator and expose the selected preference and cloud availability as attributes.
+
+### Fixed
+- Make the coordinator transport-aware so cloud fallback uses bounded cloud polling instead of attempting a local push read in a tight loop.
+- In Cloud mode, route only verified cloud controls through the Tuya Cloud API and reject unsupported controls rather than issuing a local command.
+- Normalize TinyTuya cloud token/API failures in logs so a rejected Cloud-mode selection reports the provider error code and message instead of only `unknown`.
+
 ## [0.7.4] - 2026-08-15
 
 ### Fixed

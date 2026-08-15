@@ -41,6 +41,15 @@ CONF_DEVICE_IP = "device_ip"
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_MODEL = "device_model"
 
+# Persistent user-selected transport policy (stored in ConfigEntry.options).
+CONF_CONNECTION_MODE = "connection_mode"
+CONNECTION_MODE_AUTO = "auto"
+CONNECTION_MODE_LOCAL = "local"
+CONNECTION_MODE_CLOUD = "cloud"
+CONNECTION_MODES = frozenset(
+    {CONNECTION_MODE_AUTO, CONNECTION_MODE_LOCAL, CONNECTION_MODE_CLOUD}
+)
+
 # Optional cloud fallback credentials
 CONF_CLOUD_API_KEY = "cloud_api_key"
 CONF_CLOUD_API_SECRET = "cloud_api_secret"

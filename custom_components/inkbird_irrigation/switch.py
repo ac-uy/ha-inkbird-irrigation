@@ -130,12 +130,10 @@ class InkbirdMainValveSwitch(InkbirdEntity, SwitchEntity):
         return self.coordinator.api.device.system_power == "on"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 40, "on")
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(40, "on")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 40, "off")
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(40, "off")
 
 
 class InkbirdPowerSwitch(InkbirdEntity, SwitchEntity):
@@ -153,12 +151,10 @@ class InkbirdPowerSwitch(InkbirdEntity, SwitchEntity):
         return self.coordinator.api.device.power_switch
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 102, True)
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(102, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 102, False)
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(102, False)
 
 
 class InkbirdRainSensorSwitch(InkbirdEntity, SwitchEntity):
@@ -176,12 +172,10 @@ class InkbirdRainSensorSwitch(InkbirdEntity, SwitchEntity):
         return self.coordinator.api.device.rain_sensor_enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 107, True)
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(107, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 107, False)
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(107, False)
 
 
 class InkbirdSkipScheduleSwitch(InkbirdEntity, SwitchEntity):
@@ -199,12 +193,10 @@ class InkbirdSkipScheduleSwitch(InkbirdEntity, SwitchEntity):
         return self.coordinator.api.device.skip_schedule
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 43, True)
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(43, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.hass.async_add_executor_job(self.coordinator.api.set_dp, 43, False)
-        await self.coordinator.async_request_refresh()
+        await self.async_set_dp(43, False)
 
 
 # ─── IIC-800 System Switches ──────────────────────────────────────────────────
@@ -227,14 +219,12 @@ class InkbirdRainSensorSwitch800(InkbirdEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         dp = self.coordinator.api.profile.dp_rain_sensor
         if dp:
-            await self.hass.async_add_executor_job(self.coordinator.api.set_dp, dp, True)
-        await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         dp = self.coordinator.api.profile.dp_rain_sensor
         if dp:
-            await self.hass.async_add_executor_job(self.coordinator.api.set_dp, dp, False)
-        await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, False)
 
 
 class InkbirdTimerAlarmSwitch(InkbirdEntity, SwitchEntity):
@@ -254,14 +244,12 @@ class InkbirdTimerAlarmSwitch(InkbirdEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         dp = self.coordinator.api.profile.dp_timeerror_alarm
         if dp:
-            await self.hass.async_add_executor_job(self.coordinator.api.set_dp, dp, True)
-        await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         dp = self.coordinator.api.profile.dp_timeerror_alarm
         if dp:
-            await self.hass.async_add_executor_job(self.coordinator.api.set_dp, dp, False)
-        await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, False)
 
 
 class InkbirdCancelAlarmVoiceSwitch(InkbirdEntity, SwitchEntity):
@@ -281,11 +269,9 @@ class InkbirdCancelAlarmVoiceSwitch(InkbirdEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         dp = self.coordinator.api.profile.dp_cancel_alarm_voice
         if dp:
-            await self.hass.async_add_executor_job(self.coordinator.api.set_dp, dp, True)
-        await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         dp = self.coordinator.api.profile.dp_cancel_alarm_voice
         if dp:
-            await self.hass.async_add_executor_job(self.coordinator.api.set_dp, dp, False)
-        await self.coordinator.async_request_refresh()
+            await self.async_set_dp(dp, False)
