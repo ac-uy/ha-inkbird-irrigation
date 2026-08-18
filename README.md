@@ -108,7 +108,7 @@ A failed Local verification restores the prior listener with the unchanged confi
 
 ## Connection Modes and Cloud Fallback (Optional)
 
-The integration keeps one persistent local Tuya session for event-driven updates. Optional Tuya Cloud credentials add a **Connection preference** selector:
+The integration keeps one persistent local Tuya session for event-driven updates. Its listener runs as a Home Assistant background task, so waiting for device updates never delays Home Assistant startup. Optional Tuya Cloud credentials add a **Connection preference** selector:
 
 - **Auto** (default): use the local listener when it is available. If its socket fails, verify cloud status and switch to bounded cloud polling; retry local every five minutes and switch back only after a successful local connection.
 - **Local**: use only the local listener. The integration never sends a cloud command or polls cloud while this preference is selected.

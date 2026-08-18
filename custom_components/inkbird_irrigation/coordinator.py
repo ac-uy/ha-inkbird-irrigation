@@ -89,9 +89,9 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
             self.async_set_updated_data(self.api.device)
 
     async def async_start_listener(self) -> None:
-        """Start the transport loop once integration setup has completed."""
+        """Start the long-running transport loop outside HA startup tracking."""
         if self._transport_task is None:
-            self._transport_task = self.hass.async_create_task(
+            self._transport_task = self.hass.async_create_background_task(
                 self._async_run_transport(),
                 name=f"inkbird_transport_{self.entry.entry_id}",
             )
