@@ -351,6 +351,14 @@ class InkbirdAPI:
             self._using_cloud = False
             return True
 
+    def recover_local(self) -> bool:
+        """Reconnect with the last verified protocol after a listener failure."""
+        with self._io_lock:
+            if not self._connect(probe_alternatives=False):
+                return False
+            self._using_cloud = False
+            return True
+
     def activate_cloud(self) -> bool:
         """Verify cloud state before replacing an active local transport."""
         with self._io_lock:
@@ -458,18 +466,19 @@ class InkbirdAPI:
         with self._io_lock:
             return self._connect()
 
-    def _connect(self) -> bool:
-        """Initialize the Tuya connection and auto-detect the device profile.
+    def _connect(self, probe_alternatives: bool = True) -> bool:
+        """Initialize the local connection and fetch one controller snapshot.
 
-        Tries the configured protocol version first, then alternatives when no
-        data points are returned.
+        Initial setup and explicit reconfiguration probe compatible protocols to
+        identify the controller. Listener recovery reuses only the last working
+        protocol, avoiding repeated failed handshakes against the controller.
         """
-        # Protocol versions to try: configured version first, then alternatives
         configured_ver = self._profile.tuya_version
         versions_to_try = [configured_ver]
-        for v in (3.4, 3.3, 3.5):
-            if v != configured_ver:
-                versions_to_try.append(v)
+        if probe_alternatives:
+            for version in (3.4, 3.3, 3.5):
+                if version != configured_ver:
+                    versions_to_try.append(version)
 
         dps: dict[str, Any] | None = None
         successful_version: float = configured_ver

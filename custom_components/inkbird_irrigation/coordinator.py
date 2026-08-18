@@ -108,6 +108,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
     async def _async_run_transport(self) -> None:
         """Serve the selected policy without polling a local persistent socket."""
         next_local_attempt = 0.0
+        local_failure_delay = RECONNECT_DELAY_SECONDS
         cloud_failure_delay = RECONNECT_DELAY_SECONDS
 
         while True:
@@ -119,29 +120,15 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                     self.api.receive_push_update
                 )
                 if changed:
+                    local_failure_delay = RECONNECT_DELAY_SECONDS
                     self.async_set_updated_data(self.api.device)
                     continue
                 if self.api.active_transport == CONNECTION_MODE_LOCAL:
                     continue
 
-                if preference == CONNECTION_MODE_LOCAL or not self.api.has_cloud:
-                    await asyncio.sleep(RECONNECT_DELAY_SECONDS)
-                    recovered = await self.hass.async_add_executor_job(
-                        self.api.activate_local
-                    )
-                else:
-                    recovered = await self.hass.async_add_executor_job(
-                        self.api.activate_cloud
-                    )
-                    if recovered:
-                        next_local_attempt = (
-                            time.monotonic() + AUTO_LOCAL_RETRY_SECONDS
-                        )
-
-                if recovered:
-                    self.async_set_updated_data(self.api.device)
-                    continue
-                await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+                # The persistent session failed. Do not reconnect immediately:
+                # this controller can reject rapid successive local handshakes.
+                next_local_attempt = time.monotonic() + local_failure_delay
                 continue
 
             if transport == CONNECTION_MODE_CLOUD:
@@ -153,17 +140,22 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                     self.api.device.online = False
                     self.async_set_updated_data(self.api.device)
 
-                if (
-                    preference == CONNECTION_MODE_AUTO
-                    and time.monotonic() >= next_local_attempt
-                ):
-                    next_local_attempt = time.monotonic() + AUTO_LOCAL_RETRY_SECONDS
-                    recovered = await self.hass.async_add_executor_job(
-                        self.api.activate_local
-                    )
-                    if recovered:
-                        self.async_set_updated_data(self.api.device)
-                        continue
+                if preference == CONNECTION_MODE_AUTO:
+                    if not next_local_attempt:
+                        next_local_attempt = (
+                            time.monotonic() + AUTO_LOCAL_RETRY_SECONDS
+                        )
+                    if time.monotonic() >= next_local_attempt:
+                        next_local_attempt = (
+                            time.monotonic() + AUTO_LOCAL_RETRY_SECONDS
+                        )
+                        recovered = await self.hass.async_add_executor_job(
+                            self.api.recover_local
+                        )
+                        if recovered:
+                            local_failure_delay = RECONNECT_DELAY_SECONDS
+                            self.async_set_updated_data(self.api.device)
+                            continue
 
                 delay = CLOUD_POLL_INTERVAL_SECONDS if cloud_ok else cloud_failure_delay
                 cloud_failure_delay = min(
@@ -172,12 +164,21 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                 await asyncio.sleep(delay)
                 continue
 
-            # No active transport. Local-only keeps trying local; Auto may use
+            # No active transport. Local-only keeps trying local; Auto can use
             # a verified cloud status response as a bounded fallback.
             if preference == CONNECTION_MODE_CLOUD:
-                recovered = await self.hass.async_add_executor_job(self.api.activate_cloud)
+                recovered = await self.hass.async_add_executor_job(
+                    self.api.activate_cloud
+                )
             else:
-                recovered = await self.hass.async_add_executor_job(self.api.activate_local)
+                wait_seconds = next_local_attempt - time.monotonic()
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+                    continue
+
+                recovered = await self.hass.async_add_executor_job(
+                    self.api.recover_local
+                )
                 if (
                     not recovered
                     and preference == CONNECTION_MODE_AUTO
@@ -188,8 +189,13 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                     )
 
             if recovered:
+                local_failure_delay = RECONNECT_DELAY_SECONDS
                 self.async_set_updated_data(self.api.device)
                 if self.api.active_transport == CONNECTION_MODE_CLOUD:
                     next_local_attempt = time.monotonic() + AUTO_LOCAL_RETRY_SECONDS
                 continue
-            await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+
+            next_local_attempt = time.monotonic() + local_failure_delay
+            local_failure_delay = min(
+                local_failure_delay * 2, CLOUD_FAILURE_MAX_DELAY_SECONDS
+            )

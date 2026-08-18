@@ -76,23 +76,29 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
                 cloud_api_region=user_input.get(CONF_CLOUD_API_REGION, "eu"),
                 device_model=initial_model,
             )
-            connected = await self.hass.async_add_executor_job(api.connect)
+            try:
+                connected = await self.hass.async_add_executor_job(api.connect)
 
-            if not connected and api.has_cloud:
-                cloud_ok = await self.hass.async_add_executor_job(api._cloud_update)
-                if cloud_ok:
-                    connected = True
-                    _LOGGER.warning(
-                        "Local connection failed, but cloud API works. "
-                        "Setting up with cloud fallback."
-                    )
+                if not connected and api.has_cloud:
+                    cloud_ok = await self.hass.async_add_executor_job(api._cloud_update)
+                    if cloud_ok:
+                        connected = True
+                        _LOGGER.warning(
+                            "Local connection failed, but cloud API works. "
+                            "Setting up with cloud fallback."
+                        )
+                detected_model = api.model.value
+            finally:
+                # Initial validation uses a persistent TinyTuya socket. Release it
+                # before setup opens the integration's sole long-lived listener.
+                await self.hass.async_add_executor_job(api.close)
 
             if connected:
                 await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
                 self._abort_if_unique_id_configured()
 
                 # Store the detected/chosen model in config data
-                user_input[CONF_DEVICE_MODEL] = api.model.value
+                user_input[CONF_DEVICE_MODEL] = detected_model
 
                 return self.async_create_entry(
                     title=user_input[CONF_DEVICE_NAME],

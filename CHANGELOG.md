@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2026-08-18
+
+### Fixed
+- Close the initial config-flow validation socket before creating the integration's persistent listener, preventing two local Tuya sessions from being opened during setup.
+- On local listener failure, reconnect only with the last verified Tuya protocol version and apply capped exponential backoff instead of repeatedly probing multiple protocol versions and reopening local sessions.
+
 ## [0.7.6] - 2026-08-15
 
 ### Added
