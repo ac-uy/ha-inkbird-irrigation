@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.10] - 2026-08-21
+
+### Fixed
+- Close and recreate the local Tuya socket immediately after an error or an empty status response, then retry compatible v3.4, v3.3, and v3.5 protocols through the existing bounded local recovery loop.
+
 ## [0.7.9] - 2026-08-21
 
 ### Fixed

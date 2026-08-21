@@ -352,9 +352,9 @@ class InkbirdAPI:
             return True
 
     def recover_local(self) -> bool:
-        """Reconnect with the last verified protocol after a listener failure."""
+        """Reconnect locally, trying compatible protocols after a fresh failure."""
         with self._io_lock:
-            if not self._connect(probe_alternatives=False):
+            if not self._connect(probe_alternatives=True):
                 return False
             self._using_cloud = False
             return True
@@ -434,7 +434,7 @@ class InkbirdAPI:
         self._connected = False
 
     def _try_connect_with_version(self, version: float) -> dict[str, Any] | None:
-        """Attempt connection with a specific protocol version, return DPs or None."""
+        """Attempt one protocol with a fresh socket and return its DPs on success."""
         self._reset_connection()
         d = self._ensure_connection(version=version)
         if not d:
@@ -444,21 +444,33 @@ class InkbirdAPI:
             _LOGGER.debug(
                 "Protocol v%.1f response from %s: %s", version, self._device_ip, status
             )
-            if status and "dps" in status and status["dps"]:
+            if isinstance(status, dict) and status.get("dps"):
                 return status["dps"]
-            # Log what the device returned even if empty
-            if status:
+            if isinstance(status, dict) and status.get("Err"):
+                _LOGGER.warning(
+                    "Device at %s returned Tuya error %s with protocol v%.1f: %s. "
+                    "Closing the local session before protocol fallback.",
+                    self._device_ip,
+                    status["Err"],
+                    version,
+                    status.get("Error", "unknown error"),
+                )
+            elif status:
                 _LOGGER.warning(
                     "Device at %s returned status with protocol v%.1f but no DPs: %s",
-                    self._device_ip, version, status,
+                    self._device_ip,
+                    version,
+                    status,
                 )
             else:
                 _LOGGER.warning(
                     "Device at %s returned None/empty with protocol v%.1f",
-                    self._device_ip, version,
+                    self._device_ip,
+                    version,
                 )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("status() failed with protocol v%.1f: %s", version, exc)
+        self._reset_connection()
         return None
 
     def connect(self) -> bool:
@@ -469,9 +481,10 @@ class InkbirdAPI:
     def _connect(self, probe_alternatives: bool = True) -> bool:
         """Initialize the local connection and fetch one controller snapshot.
 
-        Initial setup and explicit reconfiguration probe compatible protocols to
-        identify the controller. Listener recovery reuses only the last working
-        protocol, avoiding repeated failed handshakes against the controller.
+        Initial setup, reconfiguration, and listener recovery start with the
+        last verified protocol, then try compatible alternatives after a fresh
+        socket failure or a status response without usable DPs. This keeps
+        recovery local-only while preserving the controller's bounded backoff.
         """
         configured_ver = self._profile.tuya_version
         versions_to_try = [configured_ver]

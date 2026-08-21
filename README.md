@@ -177,7 +177,7 @@ automation:
 
 - **Protocol**: Tuya local protocol v3.4
 - **Communication**: Direct LAN (UDP/TCP on device IP)
-- **Polling interval**: Event-driven local updates over one persistent Tuya session, with a capped reconnect backoff and a single retry using the last verified protocol after a real socket failure
+- **Polling interval**: Event-driven local updates over one persistent Tuya session. After a local session failure, the integration closes the socket, retries the last verified protocol first, then tries compatible v3.4, v3.3, and v3.5 candidates with bounded backoff.
 - **No cloud dependency**: Works entirely on your local network
 - **Zones**: Sequential only — one zone runs at a time (hardware limitation)
 - **Duration**: 1-180 minutes per zone, configurable via number entity
