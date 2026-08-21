@@ -14,7 +14,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import InkbirdCoordinator
 from .entity import InkbirdEntity
-from .models import DeviceModel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,7 +26,6 @@ async def async_setup_entry(
     """Set up Inkbird zone switches."""
     coordinator: InkbirdCoordinator = hass.data[DOMAIN][entry.entry_id]
     profile = coordinator.api.profile
-    model = coordinator.api.model
 
     entities: list[SwitchEntity] = []
 
@@ -35,13 +33,13 @@ async def async_setup_entry(
     for zone in range(1, profile.num_zones + 1):
         entities.append(InkbirdZoneSwitch(coordinator, zone))
 
-    # System switches — model-dependent
-    if model == DeviceModel.IIC_600:
+    # System switches depend on the controller DP layout.
+    if profile.zone_control_method == "countdown":
         entities.append(InkbirdMainValveSwitch(coordinator))
         entities.append(InkbirdPowerSwitch(coordinator))
         entities.append(InkbirdRainSensorSwitch(coordinator))
         entities.append(InkbirdSkipScheduleSwitch(coordinator))
-    elif model == DeviceModel.IIC_800:
+    else:
         entities.append(InkbirdRainSensorSwitch800(coordinator))
         entities.append(InkbirdTimerAlarmSwitch(coordinator))
         entities.append(InkbirdCancelAlarmVoiceSwitch(coordinator))
@@ -65,16 +63,12 @@ class InkbirdZoneSwitch(InkbirdEntity, SwitchEntity):
     def is_on(self) -> bool:
         """Return True if the zone valve is open."""
         device = self.coordinator.api.device
-        model = self.coordinator.api.model
-
-        if model == DeviceModel.IIC_600:
+        if self.coordinator.api.profile.zone_control_method == "countdown":
             # DP 110 is the controller's active-zone bitmask and clears when
             # the valve closes. Countdown DPs can linger after watering stops.
             return bool(device.active_zone & (1 << (self._zone - 1)))
-        elif model == DeviceModel.IIC_800:
-            # Use bitmask from DP 107
-            return device.zone_active.get(self._zone, False)
-        return False
+        # DP45 controllers use the DP 107 bitmask.
+        return device.zone_active.get(self._zone, False)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Open the zone valve with the configured duration."""

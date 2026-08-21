@@ -29,7 +29,8 @@ _LOGGER = logging.getLogger(__name__)
 MODEL_OPTIONS = {
     "auto": "Auto-detect",
     DeviceModel.IIC_400.value: "IIC-400 (4 zones)",
-    DeviceModel.IIC_600.value: "IIC-600 (6 zones)",
+    DeviceModel.IIC_600.value: "IIC-600 (6 zones, legacy DP layout)",
+    DeviceModel.IIC_600_V35.value: "IIC-600 v3.5 (6 zones, DP45 layout)",
     DeviceModel.IIC_800.value: "IIC-800 (8 zones)",
 }
 

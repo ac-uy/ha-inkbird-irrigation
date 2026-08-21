@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.11] - 2026-08-21
+
+### Added
+- Add a dedicated six-zone IIC-600 v3.5 DP45 profile. Auto-detection now reads the station count from the DP 38 schedule payload before using ambiguous boolean DPs, selecting the correct IIC-600 profile for six-station controllers.
+
+### Fixed
+- Route IIC-400, IIC-600 v3.5, and IIC-800 controllers through their shared DP45/bitmask entities and local zone-control implementation.
+
 ## [0.7.10] - 2026-08-21
 
 ### Fixed

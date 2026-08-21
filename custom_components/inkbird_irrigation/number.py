@@ -11,7 +11,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import InkbirdCoordinator
 from .entity import InkbirdEntity
-from .models import DeviceModel
 
 # Store duration preferences locally (not on device)
 _zone_durations: dict[str, dict[int, int]] = {}
@@ -25,7 +24,6 @@ async def async_setup_entry(
     """Set up Inkbird duration number entities."""
     coordinator: InkbirdCoordinator = hass.data[DOMAIN][entry.entry_id]
     profile = coordinator.api.profile
-    model = coordinator.api.model
     num_zones = profile.num_zones
 
     _zone_durations.setdefault(entry.entry_id, {z: 30 for z in range(1, num_zones + 1)})
@@ -85,8 +83,8 @@ class InkbirdSeasonalAdjust(InkbirdEntity, NumberEntity):
         self._attr_unique_id = f"{DOMAIN}_{self._device_id}_seasonal_adjust"
         self._attr_name = "Seasonal adjustment"
 
-        # IIC-800 has range -90 to 100 (step 10); IIC-600 has 0-100 (step 1)
-        if coordinator.api.model == DeviceModel.IIC_800:
+        # DP45 controllers use the -90 to 100 range with 10% steps.
+        if coordinator.api.profile.zone_control_method == "bitmask_raw":
             self._attr_native_min_value = -90
             self._attr_native_max_value = 100
             self._attr_native_step = 10

@@ -12,7 +12,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import InkbirdCoordinator
 from .entity import InkbirdEntity
-from .models import DeviceModel
 
 
 async def async_setup_entry(
@@ -23,12 +22,11 @@ async def async_setup_entry(
     """Set up Inkbird sensors."""
     coordinator: InkbirdCoordinator = hass.data[DOMAIN][entry.entry_id]
     profile = coordinator.api.profile
-    model = coordinator.api.model
 
     entities: list[SensorEntity] = []
 
-    # Zone countdown sensors (IIC-600 only — 800 doesn't have per-zone countdown DPs)
-    if model == DeviceModel.IIC_600:
+    # Zone countdown sensors are available only on legacy IIC-600 DPs.
+    if profile.zone_control_method == "countdown":
         for zone in range(1, profile.num_zones + 1):
             entities.append(InkbirdZoneCountdownSensor(coordinator, zone))
 
@@ -40,8 +38,8 @@ async def async_setup_entry(
     entities.append(InkbirdModeSensor(coordinator))
     entities.append(InkbirdConnectionModeSensor(coordinator))
 
-    # IIC-800 specific sensors
-    if model == DeviceModel.IIC_800:
+    # DP45 controller-specific sensors.
+    if profile.zone_control_method == "bitmask_raw":
         entities.append(InkbirdIrrigationModeSensor(coordinator))
         entities.append(InkbirdActiveZoneBitmaskSensor(coordinator))
         entities.append(InkbirdQueuedZoneBitmaskSensor(coordinator))

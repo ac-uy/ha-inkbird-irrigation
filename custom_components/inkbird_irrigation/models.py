@@ -18,6 +18,7 @@ class DeviceModel(str, Enum):
 
     IIC_400 = "IIC-400"
     IIC_600 = "IIC-600"
+    IIC_600_V35 = "IIC-600 v3.5"
     IIC_800 = "IIC-800"
 
 
@@ -160,6 +161,42 @@ IIC_800_PROFILE = DeviceProfile(
     dp_seasonal_adjust=103,  # SeaAdjValue (-90 to 100, step 10)
     dp_active_zone_bitmask=107,  # zonerun_state
     dp_queued_zone_bitmask=108,  # pendingzone_state
+    dp_normal_time=38,
+    dp_irrigation_mode=44,
+    dp_irrigation_time_all=45,
+    dp_operation_mode=101,
+    dp_reset_device=105,
+    dp_timeerror_alarm=106,
+    dp_cancel_alarm_voice=109,
+    dp_merge_history=104,
+    zone_control_method="bitmask_raw",
+)
+
+
+# ─── IIC-600 v3.5 DP45 Profile ──────────────────────────────────────────────
+#
+# Newer IIC-600 revisions use the DP45 raw/bitmask architecture shared with
+# IIC-400 and IIC-800, while retaining six stations. DP 38 starts with 0x06,
+# which distinguishes this revision from the four-station IIC-400 (0x04).
+
+IIC_600_V35_PROFILE = DeviceProfile(
+    model=DeviceModel.IIC_600_V35,
+    num_zones=6,
+    product_id="ln52teq4wpifvfcl",
+    category="ggq",
+    tuya_version=3.5,
+    dp_zone_switch={},
+    dp_zone_countdown={},
+    dp_zone_elapsed={},
+    dp_system_power=None,
+    dp_skip_schedule=None,
+    dp_mode=None,
+    dp_power_switch=None,
+    dp_auto_remaining=None,
+    dp_rain_sensor=102,
+    dp_seasonal_adjust=103,
+    dp_active_zone_bitmask=107,
+    dp_queued_zone_bitmask=108,
     dp_normal_time=38,
     dp_irrigation_mode=44,
     dp_irrigation_time_all=45,
@@ -383,6 +420,7 @@ def decode_dp104(data: bytes) -> MergeHistoryEntry:
 PROFILES: dict[DeviceModel, DeviceProfile] = {
     DeviceModel.IIC_400: IIC_400_PROFILE,
     DeviceModel.IIC_600: IIC_600_PROFILE,
+    DeviceModel.IIC_600_V35: IIC_600_V35_PROFILE,
     DeviceModel.IIC_800: IIC_800_PROFILE,
 }
 
@@ -399,30 +437,52 @@ IIC_800_SIGNATURE_DPS = {38, 44, 45, 107, 108}
 IIC_400_SIGNATURE_DPS = {38, 44, 45, 107, 108, 110, 111}
 
 
-def detect_model_from_dps(dps: dict[str, Any]) -> DeviceModel | None:
-    """Attempt to detect the device model from the returned DP keys.
+def _dp38_station_count(dps: dict[str, Any]) -> int | None:
+    """Return the station count encoded by a DP 38 schedule payload."""
+    raw = dps.get("38", dps.get(38))
+    if isinstance(raw, str):
+        try:
+            raw = bytes.fromhex(raw)
+        except ValueError:
+            return None
+    elif isinstance(raw, (list, bytearray)):
+        raw = bytes(raw)
 
-    Detection strategy:
-    - If DPs 110 and 111 are present AND are booleans → IIC-400
-    - If DP 38 is present and its first byte is 0x04 → IIC-400
-    - If IIC-800 signature DPs match (without boolean 110/111) → IIC-800
-    - If IIC-600 signature DPs match → IIC-600
+    if isinstance(raw, bytes) and raw:
+        return raw[0]
+    return None
+
+
+def detect_model_from_dps(dps: dict[str, Any]) -> DeviceModel | None:
+    """Detect the controller model from its DP schema and station count.
+
+    DP45-based controllers share many DPs, including boolean DPs 110/111. Their
+    DP38 schedule payload identifies the number of stations: 4=IIC-400,
+    6=IIC-600 v3.5, and 8=IIC-800. Legacy IIC-600 controllers are identified
+    by their individual zone-switch and countdown DPs.
     """
     dp_keys = {int(k) for k in dps.keys()}
 
-    # Check for IIC-400: has DP 110 and 111 as booleans (not integers/bitmasks)
+    station_count = _dp38_station_count(dps)
+    if station_count == 4:
+        return DeviceModel.IIC_400
+    if station_count == 6:
+        return DeviceModel.IIC_600_V35
+    if station_count == 8:
+        return DeviceModel.IIC_800
+
+    # A DP38 payload is not always included in every snapshot. Retain the
+    # previous IIC-400 fallback only when no station-count discriminator exists.
     if 110 in dp_keys and 111 in dp_keys:
         val_110 = dps.get("110", dps.get(110))
         val_111 = dps.get("111", dps.get(111))
         if isinstance(val_110, bool) and isinstance(val_111, bool):
             return DeviceModel.IIC_400
 
-    # Check IIC-800 signature DPs (more unique than IIC-600)
     iic800_hits = dp_keys & IIC_800_SIGNATURE_DPS
     if len(iic800_hits) >= 2:
         return DeviceModel.IIC_800
 
-    # Check IIC-600 signature DPs
     iic600_hits = dp_keys & IIC_600_SIGNATURE_DPS
     if len(iic600_hits) >= 3:
         return DeviceModel.IIC_600

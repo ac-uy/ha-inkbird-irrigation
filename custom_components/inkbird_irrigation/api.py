@@ -84,9 +84,9 @@ class InkbirdDevice:
         """Update device state from Tuya data points."""
         self.raw_dps.update(dps)
 
-        if self.profile.model == DeviceModel.IIC_600:
+        if self.profile.zone_control_method == "countdown":
             self._update_iic600(dps)
-        elif self.profile.model == DeviceModel.IIC_800:
+        else:
             self._update_iic800(dps)
 
     def _update_iic600(self, dps: dict[str, Any]) -> None:
@@ -653,7 +653,7 @@ class InkbirdAPI:
 
             dps: dict[str, Any] = {}
 
-            if self._model == DeviceModel.IIC_600:
+            if self._profile.zone_control_method == "countdown":
                 code_to_dp = {
                     "switch_1": "1", "switch_2": "2", "switch_3": "3",
                     "switch_4": "4", "switch_5": "5", "switch_6": "6",
@@ -672,8 +672,8 @@ class InkbirdAPI:
                             value = str(value)
                         dps[dp] = value
 
-            elif self._model == DeviceModel.IIC_800:
-                # IIC-800 cloud code-to-DP mapping
+            else:
+                # DP45/bitmask controller cloud code-to-DP mapping
                 code_to_dp_800 = {
                     "normal_time": "38",
                     "irrigation_mode": "44",
@@ -954,11 +954,9 @@ class InkbirdAPI:
             return False
         self._wait_for_device()
 
-        if self._model == DeviceModel.IIC_600:
+        if self._profile.zone_control_method == "countdown":
             return self._turn_on_zone_600(zone, duration_minutes)
-        elif self._model == DeviceModel.IIC_800:
-            return self._turn_on_zone_800(zone, duration_minutes)
-        return False
+        return self._turn_on_zone_800(zone, duration_minutes)
 
     def turn_off_zone(self, zone: int) -> bool:
         """Turn off a zone while serializing access to the local socket."""
@@ -971,15 +969,13 @@ class InkbirdAPI:
             return False
         self._wait_for_device()
 
-        if self._model == DeviceModel.IIC_600:
+        if self._profile.zone_control_method == "countdown":
             return self._turn_off_zone_600(zone)
-        elif self._model == DeviceModel.IIC_800:
-            return self._turn_off_zone_800(zone)
-        return False
+        return self._turn_off_zone_800(zone)
 
     def _cloud_code_for_dp(self, dp: int) -> str | None:
         """Return a verified Tuya cloud code for a writable controller DP."""
-        if self._model == DeviceModel.IIC_600:
+        if self._profile.zone_control_method == "countdown":
             if dp in DP_ZONE_COUNTDOWN.values():
                 zone = next(zone for zone, countdown in DP_ZONE_COUNTDOWN.items() if countdown == dp)
                 return f"countdown_{zone}"
@@ -988,16 +984,14 @@ class InkbirdAPI:
                 DP_SKIP_SCHEDULE: "control_skip",
             }.get(dp)
 
-        if self._model in (DeviceModel.IIC_400, DeviceModel.IIC_800):
-            return {
-                self._profile.dp_irrigation_mode: "irrigation_mode",
-                self._profile.dp_operation_mode: "operation_mode",
-                self._profile.dp_rain_sensor: "RainSen_TotalONOFF",
-                self._profile.dp_seasonal_adjust: "SeaAdjValue",
-                self._profile.dp_timeerror_alarm: "timeerror_alarm",
-                self._profile.dp_cancel_alarm_voice: "cancel_timealarm_voice",
-            }.get(dp)
-        return None
+        return {
+            self._profile.dp_irrigation_mode: "irrigation_mode",
+            self._profile.dp_operation_mode: "operation_mode",
+            self._profile.dp_rain_sensor: "RainSen_TotalONOFF",
+            self._profile.dp_seasonal_adjust: "SeaAdjValue",
+            self._profile.dp_timeerror_alarm: "timeerror_alarm",
+            self._profile.dp_cancel_alarm_voice: "cancel_timealarm_voice",
+        }.get(dp)
 
     def set_zone_duration(self, zone: int, duration_minutes: int) -> bool:
         """Set an IIC-600 zone countdown through the active transport."""
@@ -1006,7 +1000,7 @@ class InkbirdAPI:
 
     def _set_zone_duration(self, zone: int, duration_minutes: int) -> bool:
         """Set the next IIC-600 countdown value; IIC-800 stores it in DP 45 at start."""
-        if self._model == DeviceModel.IIC_800:
+        if self._profile.zone_control_method == "bitmask_raw":
             return True
         if zone < 1 or zone > self._profile.num_zones:
             return False
@@ -1041,18 +1035,14 @@ class InkbirdAPI:
             return False
 
     def set_irrigation_mode(self, mode: str) -> bool:
-        """Set irrigation mode on IIC-800 ('order' or 'together')."""
-        if self._model != DeviceModel.IIC_800:
-            return False
+        """Set irrigation mode on a DP45 controller ('order' or 'together')."""
         dp = self._profile.dp_irrigation_mode
         if dp is None:
             return False
         return self.set_dp(dp, mode)
 
     def set_operation_mode(self, mode: str) -> bool:
-        """Set operation mode on IIC-800 ('OFF', 'Manual', 'Auto')."""
-        if self._model != DeviceModel.IIC_800:
-            return False
+        """Set operation mode on a DP45 controller ('OFF', 'Manual', 'Auto')."""
         dp = self._profile.dp_operation_mode
         if dp is None:
             return False

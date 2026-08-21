@@ -37,6 +37,7 @@ class InkbirdEntity(CoordinatorEntity[InkbirdCoordinator]):
         model = self.coordinator.api.model
         model_name = {
             DeviceModel.IIC_600: "IIC-600-WIFI",
+            DeviceModel.IIC_600_V35: "IIC-600-WIFI (v3.5 / DP45)",
             DeviceModel.IIC_800: "IIC-800-WIFI",
         }.get(model, model.value)
 

@@ -24,7 +24,8 @@ A custom Home Assistant integration for the **Inkbird IIC-600-WIFI** smart irrig
 
 | Model | Status |
 |-------|--------|
-| IIC-600 WIFI | ✅ Fully supported and tested |
+| IIC-600 WIFI | ✅ Fully supported with the legacy DP layout |
+| IIC-600 WIFI (v3.5 / DP45) | 🧪 Beta — six-zone DP45 profile; please report results |
 | IIC-800 WIFI | 🧪 Beta (testing in progress with community) |
 | IIC-400 WIFI | ⚠️ Experimental (untested — community testers needed! See [issue #1](https://github.com/ac-uy/ha-inkbird-irrigation/issues/1)) |
 
