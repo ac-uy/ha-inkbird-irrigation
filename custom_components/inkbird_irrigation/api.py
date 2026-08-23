@@ -266,6 +266,7 @@ class InkbirdAPI:
         cloud_api_region: str = "eu",
         device_model: DeviceModel | str = DeviceModel.IIC_600,
         connection_preference: str = CONNECTION_MODE_AUTO,
+        local_protocol: float | str | None = None,
     ) -> None:
         self._device_id = device_id
         self._local_key = local_key
@@ -277,6 +278,7 @@ class InkbirdAPI:
         self._cloud: tinytuya.Cloud | None = None
         self._connected = False
         self._fail_count = 0
+        self._recovery_failures = 0
         self._using_cloud = False
         self._connection_preference = (
             connection_preference
@@ -288,7 +290,9 @@ class InkbirdAPI:
         self._last_heartbeat = 0.0
         self._heartbeat_interval = 30.0
 
-        # Resolve model
+        # Resolve model and use the entry's last verified protocol when one is
+        # available. Profiles are shared definitions and must never be mutated
+        # by one controller's protocol discovery result.
         if isinstance(device_model, str):
             try:
                 device_model = DeviceModel(device_model)
@@ -296,6 +300,11 @@ class InkbirdAPI:
                 device_model = DeviceModel.IIC_600
         self._model = device_model
         self._profile = get_profile(device_model)
+        self._model_is_frozen = False
+        try:
+            self._last_successful_protocol = float(local_protocol)
+        except (TypeError, ValueError):
+            self._last_successful_protocol = self._profile.tuya_version
         self.device = InkbirdDevice(self._profile)
 
     @property
@@ -307,6 +316,15 @@ class InkbirdAPI:
     def profile(self) -> DeviceProfile:
         """Return the device profile."""
         return self._profile
+
+    def freeze_model(self) -> None:
+        """Prevent later recovery responses from changing entity topology."""
+        self._model_is_frozen = True
+
+    @property
+    def local_protocol(self) -> float:
+        """Return the last verified local Tuya protocol for this controller."""
+        return self._last_successful_protocol
 
     @property
     def has_cloud(self) -> bool:
@@ -333,6 +351,11 @@ class InkbirdAPI:
         return self._fail_count
 
     @property
+    def recovery_failures(self) -> int:
+        """Return consecutive bounded local recovery failures."""
+        return self._recovery_failures
+
+    @property
     def _can_fallback_to_cloud(self) -> bool:
         """Return whether an automatic local-command fallback is permitted."""
         return self._connection_preference == CONNECTION_MODE_AUTO and self._has_cloud
@@ -344,17 +367,32 @@ class InkbirdAPI:
         self._connection_preference = preference
 
     def activate_local(self) -> bool:
-        """Verify and activate the persistent local transport."""
+        """Verify and activate the persistent local transport with discovery."""
         with self._io_lock:
-            if not self._connect():
+            if not self._connect(probe_alternatives=True):
                 return False
             self._using_cloud = False
             return True
 
     def recover_local(self) -> bool:
-        """Reconnect locally, trying compatible protocols after a fresh failure."""
+        """Reconnect using the last verified protocol before bounded rediscovery.
+
+        Normal reconnects use one fresh socket with the last protocol that
+        returned DPs for this controller. Every third failed recovery is one
+        serialized protocol-rediscovery cycle, retaining support for controller
+        variants while avoiding a three-protocol handshake on every retry.
+        """
         with self._io_lock:
-            if not self._connect(probe_alternatives=True):
+            self._recovery_failures += 1
+            probe_alternatives = self._recovery_failures % 3 == 0
+            if probe_alternatives:
+                _LOGGER.warning(
+                    "Local recovery for %s has failed %d times; performing one "
+                    "bounded protocol rediscovery cycle",
+                    self._device_ip,
+                    self._recovery_failures,
+                )
+            if not self._connect(probe_alternatives=probe_alternatives):
                 return False
             self._using_cloud = False
             return True
@@ -395,27 +433,24 @@ class InkbirdAPI:
         """Get or create a persistent connection.
 
         Args:
-            version: If provided, force this protocol version. Otherwise use profile default.
+            version: If provided, force this protocol version. Otherwise use the
+                last protocol verified for this controller instance.
         """
         if self._tuya and self._connected and version is None:
             return self._tuya
-        # Close existing connection if switching versions
         if self._tuya and version is not None:
             self._reset_connection()
         try:
-            ver = version if version is not None else self._profile.tuya_version
+            ver = version if version is not None else self._last_successful_protocol
             self._tuya = tinytuya.Device(self._device_id, self._device_ip, self._local_key)
             self._tuya.set_version(ver)
-            # Keep one local session. Reopening the controller connection every
-            # 15 seconds can make an IIC-600 stop accepting local requests.
-            # Each poll still uses a complete status query.
             self._tuya.set_socketPersistent(True)
             self._tuya.set_socketTimeout(5)
             self._connected = True
-            self._fail_count = 0
             _LOGGER.debug(
                 "Local connection prepared for %s (protocol v%.1f)",
-                self._device_ip, ver,
+                self._device_ip,
+                ver,
             )
             return self._tuya
         except Exception as exc:  # noqa: BLE001
@@ -476,68 +511,75 @@ class InkbirdAPI:
     def connect(self) -> bool:
         """Connect and fetch one complete initial controller snapshot."""
         with self._io_lock:
-            return self._connect()
+            return self._connect(probe_alternatives=True)
 
-    def _connect(self, probe_alternatives: bool = True) -> bool:
+    def _connect(self, probe_alternatives: bool) -> bool:
         """Initialize the local connection and fetch one controller snapshot.
 
-        Initial setup, reconfiguration, and listener recovery start with the
-        last verified protocol, then try compatible alternatives after a fresh
-        socket failure or a status response without usable DPs. This keeps
-        recovery local-only while preserving the controller's bounded backoff.
+        Discovery starts with the last successful protocol for this controller.
+        It adds the model's configured default and compatible alternatives only
+        for initial validation or a bounded rediscovery recovery cycle.
         """
         configured_ver = self._profile.tuya_version
-        versions_to_try = [configured_ver]
+        versions_to_try = [self._last_successful_protocol]
         if probe_alternatives:
-            for version in (3.4, 3.3, 3.5):
-                if version != configured_ver:
+            for version in (configured_ver, 3.4, 3.3, 3.5):
+                if version not in versions_to_try:
                     versions_to_try.append(version)
 
         dps: dict[str, Any] | None = None
-        successful_version: float = configured_ver
+        successful_version = self._last_successful_protocol
 
-        for ver in versions_to_try:
+        for index, ver in enumerate(versions_to_try):
             dps = self._try_connect_with_version(ver)
             if dps:
                 successful_version = ver
-                if ver != configured_ver:
+                if ver != self._last_successful_protocol:
                     _LOGGER.info(
-                        "Device responded on protocol v%.1f (configured was v%.1f)",
-                        ver, configured_ver,
+                        "Device responded on protocol v%.1f (last verified was v%.1f)",
+                        ver,
+                        self._last_successful_protocol,
                     )
                 break
-            # Small delay between retries to let device settle
-            time.sleep(1)
+            if index < len(versions_to_try) - 1:
+                time.sleep(1)
 
         if dps:
-            # Auto-detect model from returned DPs
             detected = detect_model_from_dps(dps)
             if detected and detected != self._model:
-                _LOGGER.info(
-                    "Auto-detected model %s (was configured as %s), switching profile",
-                    detected.value, self._model.value,
-                )
-                self._model = detected
-                self._profile = get_profile(detected)
-                self.device = InkbirdDevice(self._profile)
+                if self._model_is_frozen:
+                    _LOGGER.warning(
+                        "Detected model %s after setup, but retaining frozen %s "
+                        "profile to preserve the existing entity topology",
+                        detected.value,
+                        self._model.value,
+                    )
+                else:
+                    _LOGGER.info(
+                        "Auto-detected model %s (was configured as %s), switching profile",
+                        detected.value,
+                        self._model.value,
+                    )
+                    self._model = detected
+                    self._profile = get_profile(detected)
+                    self.device = InkbirdDevice(self._profile)
 
-            # Update profile tuya_version to the one that worked
-            if successful_version != self._profile.tuya_version:
-                _LOGGER.info(
-                    "Updating protocol version from %.1f to %.1f for future connections",
-                    self._profile.tuya_version, successful_version,
-                )
-                self._profile.tuya_version = successful_version
-
+            self._last_successful_protocol = successful_version
+            self._fail_count = 0
+            self._recovery_failures = 0
+            self._last_heartbeat = time.monotonic()
             self.device.online = True
             self._using_cloud = False
             self.device.update_from_dps(dps)
             _LOGGER.debug(
                 "Connected to Inkbird %s at %s (protocol v%.1f)",
-                self._model.value, self._device_ip, successful_version,
+                self._model.value,
+                self._device_ip,
+                successful_version,
             )
             return True
 
+        self._fail_count += 1
         _LOGGER.error(
             "No DPs returned from device at %s after trying protocol versions %s. "
             "Raw responses were logged at debug level. "
@@ -549,6 +591,7 @@ class InkbirdAPI:
             [f"v{v:.1f}" for v in versions_to_try],
         )
         self._reset_connection()
+        self.device.online = False
         return False
 
     def update(self) -> bool:

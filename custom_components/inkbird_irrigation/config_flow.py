@@ -20,6 +20,7 @@ from .const import (
     CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_LOCAL_KEY,
+    CONF_LOCAL_PROTOCOL,
     DOMAIN,
 )
 from .models import DeviceModel
@@ -78,9 +79,10 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
                 device_model=initial_model,
             )
             try:
-                connected = await self.hass.async_add_executor_job(api.connect)
+                local_connected = await self.hass.async_add_executor_job(api.connect)
+                connected = local_connected
 
-                if not connected and api.has_cloud:
+                if not local_connected and api.has_cloud:
                     cloud_ok = await self.hass.async_add_executor_job(api._cloud_update)
                     if cloud_ok:
                         connected = True
@@ -98,8 +100,12 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
                 self._abort_if_unique_id_configured()
 
-                # Store the detected/chosen model in config data
+                # Store the detected/chosen model and a locally verified
+                # protocol in config data. Cloud-only validation must not claim
+                # that a default local protocol was actually verified.
                 user_input[CONF_DEVICE_MODEL] = detected_model
+                if local_connected:
+                    user_input[CONF_LOCAL_PROTOCOL] = api.local_protocol
 
                 return self.async_create_entry(
                     title=user_input[CONF_DEVICE_NAME],
@@ -152,6 +158,7 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_LOCAL_KEY],
                     user_input[CONF_DEVICE_IP],
                     device_model=device_model,
+                    local_protocol=entry.data.get(CONF_LOCAL_PROTOCOL),
                 )
                 try:
                     connected = await self.hass.async_add_executor_job(api.connect)
@@ -165,6 +172,7 @@ class InkbirdIrrigationConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_LOCAL_KEY: user_input[CONF_LOCAL_KEY],
                             CONF_DEVICE_IP: user_input[CONF_DEVICE_IP],
                             CONF_DEVICE_MODEL: api.model.value,
+                            CONF_LOCAL_PROTOCOL: api.local_protocol,
                         },
                         reason="reconfigure_successful",
                     )

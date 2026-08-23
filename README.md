@@ -176,9 +176,11 @@ automation:
 
 ## Technical Details
 
-- **Protocol**: Tuya local protocol v3.4
+- **Protocol**: Tuya local protocol varies by controller. The last protocol that returned a valid DP snapshot is stored in the config entry and tried first on later local reconnects.
 - **Communication**: Direct LAN (UDP/TCP on device IP)
-- **Polling interval**: Event-driven local updates over one persistent Tuya session. After a local session failure, the integration closes the socket, retries the last verified protocol first, then tries compatible v3.4, v3.3, and v3.5 candidates with bounded backoff.
+- **Polling interval**: Event-driven local updates over one persistent Tuya session. On a local failure, the integration closes the socket and retries the persisted verified protocol first. It performs one serialized v3.4/v3.3/v3.5 rediscovery cycle only after every third failed bounded recovery attempt, avoiding a three-protocol handshake on every retry.
+- **Startup recovery**: If neither selected transport is initially reachable, the config entry stays loaded with unavailable entities. Its first local retry waits 30 seconds, then uses capped background recovery instead of repeatedly re-running Home Assistant entry setup.
+- **Stable topology**: Model auto-detection runs before platforms are created. After setup, the integration retains that profile so a later recovery response cannot replace entities with an incompatible model layout.
 - **No cloud dependency**: Works entirely on your local network
 - **Zones**: Sequential only — one zone runs at a time (hardware limitation)
 - **Duration**: 1-180 minutes per zone, configurable via number entity

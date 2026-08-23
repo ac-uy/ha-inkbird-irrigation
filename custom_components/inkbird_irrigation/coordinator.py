@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import InkbirdAPI, InkbirdDevice
 from .const import (
     CONF_CONNECTION_MODE,
+    CONF_LOCAL_PROTOCOL,
     CONNECTION_MODE_AUTO,
     CONNECTION_MODE_CLOUD,
     CONNECTION_MODE_LOCAL,
@@ -36,9 +37,11 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
         hass: HomeAssistant,
         api: InkbirdAPI,
         entry: ConfigEntry,
+        initially_unavailable: bool = False,
     ) -> None:
         self.api = api
         self.entry = entry
+        self._initially_unavailable = initially_unavailable
         self._transport_task: asyncio.Task[None] | None = None
         self._transport_lock = asyncio.Lock()
 
@@ -57,6 +60,20 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                 f"Failed to fetch state from Inkbird {self.api.model.value}"
             )
         return self.api.device
+
+    async def _persist_local_protocol(self) -> None:
+        """Store a protocol only after this controller verified it locally."""
+        if self.api.active_transport != CONNECTION_MODE_LOCAL:
+            return
+
+        protocol = self.api.local_protocol
+        if self.entry.data.get(CONF_LOCAL_PROTOCOL) == protocol:
+            return
+
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={**self.entry.data, CONF_LOCAL_PROTOCOL: protocol},
+        )
 
     async def async_set_connection_preference(self, preference: str) -> None:
         """Verify a requested transport, then persist and publish the policy."""
@@ -86,6 +103,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                 self.entry,
                 options={**self.entry.options, CONF_CONNECTION_MODE: preference},
             )
+            await self._persist_local_protocol()
             self.async_set_updated_data(self.api.device)
 
     async def async_start_listener(self) -> None:
@@ -107,7 +125,11 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
 
     async def _async_run_transport(self) -> None:
         """Serve the selected policy without polling a local persistent socket."""
-        next_local_attempt = 0.0
+        next_local_attempt = (
+            time.monotonic() + RECONNECT_DELAY_SECONDS
+            if self._initially_unavailable
+            else 0.0
+        )
         local_failure_delay = RECONNECT_DELAY_SECONDS
         cloud_failure_delay = RECONNECT_DELAY_SECONDS
 
@@ -128,6 +150,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
 
                 # The persistent session failed. Do not reconnect immediately:
                 # this controller can reject rapid successive local handshakes.
+                self.async_set_updated_data(self.api.device)
                 next_local_attempt = time.monotonic() + local_failure_delay
                 continue
 
@@ -154,6 +177,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                         )
                         if recovered:
                             local_failure_delay = RECONNECT_DELAY_SECONDS
+                            await self._persist_local_protocol()
                             self.async_set_updated_data(self.api.device)
                             continue
 
@@ -164,18 +188,19 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
                 await asyncio.sleep(delay)
                 continue
 
-            # No active transport. Local-only keeps trying local; Auto can use
-            # a verified cloud status response as a bounded fallback.
+            # No active transport. Apply the same bounded delay to every
+            # startup/recovery attempt, including Cloud-only entries, so a
+            # failed transport never becomes a tight retry loop.
+            wait_seconds = next_local_attempt - time.monotonic()
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+                continue
+
             if preference == CONNECTION_MODE_CLOUD:
                 recovered = await self.hass.async_add_executor_job(
                     self.api.activate_cloud
                 )
             else:
-                wait_seconds = next_local_attempt - time.monotonic()
-                if wait_seconds > 0:
-                    await asyncio.sleep(wait_seconds)
-                    continue
-
                 recovered = await self.hass.async_add_executor_job(
                     self.api.recover_local
                 )
@@ -190,6 +215,7 @@ class InkbirdCoordinator(DataUpdateCoordinator[InkbirdDevice]):
 
             if recovered:
                 local_failure_delay = RECONNECT_DELAY_SECONDS
+                await self._persist_local_protocol()
                 self.async_set_updated_data(self.api.device)
                 if self.api.active_transport == CONNECTION_MODE_CLOUD:
                     next_local_attempt = time.monotonic() + AUTO_LOCAL_RETRY_SECONDS

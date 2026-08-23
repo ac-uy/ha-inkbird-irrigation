@@ -139,7 +139,9 @@ class InkbirdConnectionModeSensor(InkbirdEntity, SensorEntity):
         return {
             "selected_preference": self.coordinator.api.connection_preference,
             "active_transport": self.coordinator.api.active_transport,
+            "local_protocol": f"{self.coordinator.api.local_protocol:.1f}",
             "fail_count": self.coordinator.api.fail_count,
+            "recovery_failures": self.coordinator.api.recovery_failures,
             "cloud_available": self.coordinator.api.has_cloud,
             "device_model": self.coordinator.api.model.value,
         }

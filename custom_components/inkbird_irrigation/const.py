@@ -40,6 +40,8 @@ CONF_LOCAL_KEY = "local_key"
 CONF_DEVICE_IP = "device_ip"
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_MODEL = "device_model"
+# Last local protocol that returned a valid DP snapshot for this controller.
+CONF_LOCAL_PROTOCOL = "local_protocol"
 
 # Persistent user-selected transport policy (stored in ConfigEntry.options).
 CONF_CONNECTION_MODE = "connection_mode"

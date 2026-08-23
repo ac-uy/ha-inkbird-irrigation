@@ -8,9 +8,8 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant
 
 from .api import InkbirdAPI
 from .const import (
@@ -26,6 +25,7 @@ from .const import (
     CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_LOCAL_KEY,
+    CONF_LOCAL_PROTOCOL,
     DOMAIN,
 )
 from .coordinator import InkbirdCoordinator
@@ -62,8 +62,13 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Inkbird Irrigation from a config entry."""
-    # Determine model — default to IIC-600 for backward compat with v1 entries
+    """Set up Inkbird Irrigation from a config entry.
+
+    A failed initial local connection leaves the entry loaded and its entities
+    unavailable. The transport coordinator then performs bounded recovery,
+    avoiding Home Assistant setup retries that repeatedly create fresh Tuya
+    sessions while the controller is rejecting local handshakes.
+    """
     model_str = entry.data.get(CONF_DEVICE_MODEL, DeviceModel.IIC_600.value)
     try:
         device_model = DeviceModel(model_str)
@@ -87,45 +92,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cloud_api_region=entry.data.get(CONF_CLOUD_API_REGION, "eu"),
         device_model=device_model,
         connection_preference=preference,
+        local_protocol=entry.data.get(CONF_LOCAL_PROTOCOL),
     )
+    connected = False
+    connection_description = "unavailable"
 
     if preference == CONNECTION_MODE_CLOUD:
         connected = await hass.async_add_executor_job(api.activate_cloud)
-        connection_description = "cloud"
+        if connected:
+            connection_description = "cloud"
     else:
         connected = await hass.async_add_executor_job(api.activate_local)
-        connection_description = "local"
-        if (
-            not connected
-            and preference == CONNECTION_MODE_AUTO
-            and api.has_cloud
-        ):
+        if connected:
+            connection_description = "local"
+        elif preference == CONNECTION_MODE_AUTO and api.has_cloud:
             connected = await hass.async_add_executor_job(api.activate_cloud)
-            connection_description = "cloud"
+            if connected:
+                connection_description = "cloud"
 
-    if not connected:
-        if preference == CONNECTION_MODE_CLOUD:
-            raise ConfigEntryNotReady(
-                f"Cannot connect to Inkbird {api.model.value} through Tuya Cloud"
-            )
-        if preference == CONNECTION_MODE_LOCAL:
-            raise ConfigEntryNotReady(
-                f"Cannot connect to Inkbird {api.model.value} locally"
-            )
-        raise ConfigEntryNotReady(
-            f"Cannot connect to Inkbird {api.model.value} (local and cloud both failed)"
+    coordinator = InkbirdCoordinator(
+        hass, api, entry, initially_unavailable=not connected
+    )
+    if api.active_transport == CONNECTION_MODE_LOCAL:
+        await coordinator._persist_local_protocol()
+
+    if connected:
+        _LOGGER.info(
+            "Starting Inkbird %s using %s transport",
+            api.model.value,
+            connection_description,
+        )
+        await coordinator.async_config_entry_first_refresh()
+    else:
+        api.device.online = False
+        coordinator.async_set_updated_data(api.device)
+        _LOGGER.warning(
+            "Starting Inkbird %s unavailable; bounded background recovery will "
+            "retry the local transport without re-running entry setup",
+            api.model.value,
         )
 
-    _LOGGER.info("Starting Inkbird %s using %s transport", api.model.value, connection_description)
-
-    coordinator = InkbirdCoordinator(hass, api, entry)
-    await coordinator.async_config_entry_first_refresh()
-
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    api.freeze_model()
     await coordinator.async_start_listener()
-
     return True
 
 

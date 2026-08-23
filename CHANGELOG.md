@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.7.12] - 2026-08-23
+
+### Known issues
+- **The integration is currently not considered stable.** Some controllers can enter a local Tuya session-failure state where status requests repeatedly return Tuya errors (observed: `914` with v3.4 and `901` with v3.3) or no DP snapshot.
+- The observed failure can persist across integration reconnect attempts; in the affected incident, a controller power cycle was the only confirmed recovery. The integration's bounded reconnect logic limits additional session churn but cannot repair a controller whose local service remains locked up.
+- Protocol behavior varies by controller type. We are actively improving sticky per-controller protocol selection, bounded recovery, and diagnostics while retaining model-specific protocol discovery.
+
+### Fixed
+- Keep a failed Inkbird config entry loaded with unavailable entities and use bounded coordinator recovery, preventing Home Assistant setup retries from repeatedly creating fresh local Tuya sessions.
+- Recover with the controller instance's last verified Tuya protocol first. Persist that protocol after a successful local connection, and run a serialized v3.4/v3.3/v3.5 rediscovery cycle only after every third failed recovery attempt while retaining initial protocol discovery for new controllers.
+- Delay the first local retry by 30 seconds after unavailable startup, publish later listener failures as unavailable, and prevent post-setup recovery from changing the model/entity topology.
+- Keep the Connection preference selector and local next-run duration settings available during a controller transport outage, while device-dependent entities correctly report unavailable.
+- Expose the last verified local protocol and consecutive recovery failures on the Connection mode sensor for diagnosis.
+
 ## [0.7.11] - 2026-08-21
 
 ### Added

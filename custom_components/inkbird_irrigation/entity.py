@@ -20,6 +20,11 @@ class InkbirdEntity(CoordinatorEntity[InkbirdCoordinator]):
         super().__init__(coordinator)
         self._device_id = coordinator.entry.data["device_id"]
 
+    @property
+    def available(self) -> bool:
+        """Return availability of both coordinator data and controller transport."""
+        return super().available and self.coordinator.api.device.online
+
     async def async_set_dp(self, dp: int, value: object) -> None:
         """Set a controller data point and surface transport failures to HA."""
         success = await self.hass.async_add_executor_job(

@@ -58,6 +58,11 @@ class InkbirdZoneDuration(InkbirdEntity, NumberEntity):
         self._attr_name = f"Zone {zone} duration"
 
     @property
+    def available(self) -> bool:
+        """Keep the next-run local preference configurable during outages."""
+        return self.coordinator.last_update_success
+
+    @property
     def native_value(self) -> float:
         """Return the current duration setting."""
         entry_id = self.coordinator.entry.entry_id

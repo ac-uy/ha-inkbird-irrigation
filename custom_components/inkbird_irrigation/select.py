@@ -48,6 +48,11 @@ class InkbirdConnectionPreferenceSelect(InkbirdEntity, SelectEntity):
         self._attr_name = "Connection preference"
 
     @property
+    def available(self) -> bool:
+        """Keep transport management available while the controller is offline."""
+        return self.coordinator.last_update_success
+
+    @property
     def current_option(self) -> str:
         """Return the policy that was successfully activated."""
         return _OPTIONS[self.coordinator.api.connection_preference]
