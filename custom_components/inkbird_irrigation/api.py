@@ -4,6 +4,7 @@ Supports IIC-600 and IIC-800 models via device profiles.
 """
 
 from __future__ import annotations
+import base64
 
 import logging
 import threading
@@ -871,20 +872,30 @@ class InkbirdAPI:
             return self._cloud_turn_on_800(zone, duration_minutes, raw_payload)
 
         try:
-            d = self._ensure_connection()
-            if d:
-                # Write durations
-                dp_time = self._profile.dp_irrigation_time_all
-                if dp_time:
-                    d.set_value(dp_time, raw_payload, nowait=True)
-                    time.sleep(0.5)
-                # Set to Manual mode to start irrigation
-                dp_mode = self._profile.dp_operation_mode
-                if dp_mode:
-                    d.set_value(dp_mode, "Manual")
-                _LOGGER.debug("Zone %d ON for %d min (IIC-800 local)", zone, duration_minutes)
-                time.sleep(1)
-                return True
+    d = self._ensure_connection()
+    if d:
+        # Set Manual mode first; the IIC-800 requires this before DP45
+        dp_mode = self._profile.dp_operation_mode
+        if dp_mode:
+            d.set_value(dp_mode, "Manual")
+            time.sleep(0.5)
+
+        # Send the per-zone manual durations via RAW DP45
+        dp_time = self._profile.dp_irrigation_time_all
+        if dp_time:
+            d.set_value(
+                dp_time,
+                base64.b64encode(raw_payload).decode("ascii"),
+                nowait=True,
+            )
+
+        _LOGGER.debug(
+            "Zone %d ON for %d min (IIC-800 local)",
+            zone,
+            duration_minutes,
+        )
+        time.sleep(1)
+        return True
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Local turn_on_zone (800) failed: %s", exc)
             self._reset_connection()
@@ -966,18 +977,25 @@ class InkbirdAPI:
                 return False
 
         try:
-            d = self._ensure_connection()
-            if d:
-                dp_time = self._profile.dp_irrigation_time_all
-                if dp_time:
-                    d.set_value(dp_time, raw_payload, nowait=True)
-                    time.sleep(0.5)
-                dp_mode = self._profile.dp_operation_mode
-                if dp_mode:
-                    d.set_value(dp_mode, "Manual")
-                _LOGGER.debug("Multi-zone start (IIC-800 local): %s", durations)
-                time.sleep(1)
-                return True
+    d = self._ensure_connection()
+    if d:
+        # Set Manual mode first; the IIC-800 requires this before DP45
+        dp_mode = self._profile.dp_operation_mode
+        if dp_mode:
+            d.set_value(dp_mode, "Manual")
+            time.sleep(0.5)
+
+        dp_time = self._profile.dp_irrigation_time_all
+        if dp_time:
+            d.set_value(
+                dp_time,
+                base64.b64encode(raw_payload).decode("ascii"),
+                nowait=True,
+            )
+
+        _LOGGER.debug("Multi-zone start (IIC-800 local): %s", durations)
+        time.sleep(1)
+        return True
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Local multi-zone start failed: %s", exc)
             self._reset_connection()
