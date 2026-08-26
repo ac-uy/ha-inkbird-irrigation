@@ -178,7 +178,9 @@ automation:
 
 - **Protocol**: Tuya local protocol varies by controller. The last protocol that returned a valid DP snapshot is stored in the config entry and tried first on later local reconnects.
 - **Communication**: Direct LAN (UDP/TCP on device IP)
-- **Polling interval**: Event-driven local updates over one persistent Tuya session. On a local failure, the integration closes the socket and retries the persisted verified protocol first. It performs one serialized v3.4/v3.3/v3.5 rediscovery cycle only after every third failed bounded recovery attempt, avoiding a three-protocol handshake on every retry.
+- **Dependency**: TinyTuya is pinned to `1.19.0`, matching the version used by the installed Tuya Local integration's tested persistent-session implementation.
+- **Polling interval**: Event-driven local updates over one persistent Tuya session, with a non-waiting 10-second heartbeat and a 30-second read-only status reconciliation. The connection limits TinyTuya to one internal retry; the coordinator owns the bounded socket reset and protocol-rediscovery policy. On a local failure, it retries the persisted verified protocol first and performs one serialized v3.4/v3.3/v3.5 rediscovery cycle only after every third failed recovery attempt.
+- **Session-lock limitation**: These transport safeguards reduce stale-session and retry churn risks, but cannot unlock a controller that has already begun rejecting every authenticated local session. That controller-side state requires a recovery action outside the local Tuya protocol.
 - **Startup recovery**: If neither selected transport is initially reachable, the config entry stays loaded with unavailable entities. Its first local retry waits 30 seconds, then uses capped background recovery instead of repeatedly re-running Home Assistant entry setup.
 - **Stable topology**: Model auto-detection runs before platforms are created. After setup, the integration retains that profile so a later recovery response cannot replace entities with an incompatible model layout.
 - **No cloud dependency**: Works entirely on your local network

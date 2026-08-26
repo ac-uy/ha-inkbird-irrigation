@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-08-26
+
+### Changed
+- Align the persistent local Tuya session lifecycle with the established Tuya Local pattern: one TinyTuya-owned retry per call, non-waiting 10-second heartbeats, and a read-only 30-second state reconciliation on the existing socket.
+
+### Fixed
+- Treat local Tuya receive error `904` as a v3.4 no-update response instead of tearing down a healthy persistent session and starting an unnecessary reconnect cycle.
+
 ## [0.7.12] - 2026-08-23
 
 ### Known issues

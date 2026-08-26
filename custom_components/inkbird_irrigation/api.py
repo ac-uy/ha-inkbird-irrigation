@@ -287,8 +287,12 @@ class InkbirdAPI:
         )
         self._command_lock = False
         self._io_lock = threading.RLock()
+        # Match the disciplined persistent-session cadence used by Tuya Local:
+        # frequent non-waiting keepalives plus periodic state reconciliation.
         self._last_heartbeat = 0.0
-        self._heartbeat_interval = 30.0
+        self._last_status_refresh = 0.0
+        self._heartbeat_interval = 10.0
+        self._status_refresh_interval = 30.0
 
         # Resolve model and use the entry's last verified protocol when one is
         # available. Profiles are shared definitions and must never be mutated
@@ -446,6 +450,9 @@ class InkbirdAPI:
             self._tuya.set_version(ver)
             self._tuya.set_socketPersistent(True)
             self._tuya.set_socketTimeout(5)
+            # Keep TinyTuya from opening additional rapid replacement sockets;
+            # the coordinator owns the bounded retry and protocol rotation policy.
+            self._tuya.set_socketRetryLimit(1)
             self._connected = True
             _LOGGER.debug(
                 "Local connection prepared for %s (protocol v%.1f)",
@@ -567,7 +574,9 @@ class InkbirdAPI:
             self._last_successful_protocol = successful_version
             self._fail_count = 0
             self._recovery_failures = 0
-            self._last_heartbeat = time.monotonic()
+            now = time.monotonic()
+            self._last_heartbeat = now
+            self._last_status_refresh = now
             self.device.online = True
             self._using_cloud = False
             self.device.update_from_dps(dps)
@@ -602,16 +611,63 @@ class InkbirdAPI:
             return self._cloud_update()
         return False
 
-    def receive_push_update(self) -> bool:
-        """Read one unsolicited local update from the persistent Tuya socket.
+    def _apply_local_response(
+        self, response: Any, source: str, allow_no_update: bool = False
+    ) -> bool:
+        """Apply a valid local DP payload and classify response failures."""
+        if not response:
+            return False
+        if not isinstance(response, dict):
+            _LOGGER.debug("Local %s returned unexpected %s", source, type(response).__name__)
+            return False
+        if "Err" in response:
+            # Tuya v3.4 devices can use 904 to mean that no push update is
+            # available. Restrict that exception to the unsolicited receive
+            # path; a status reconciliation error must trigger recovery.
+            if str(response["Err"]) == "904" and allow_no_update:
+                _LOGGER.debug("Local %s returned benign no-update error 904", source)
+                return False
+            _LOGGER.debug("Local %s returned Tuya error %s", source, response["Err"])
+            self._reset_connection()
+            self.device.online = False
+            return False
 
-        The controller can send partial DP updates at any time. They must be
-        consumed independently of commands; calling ``status()`` here can read
-        an earlier pushed frame as though it were a new query response.
+        dps = response.get("dps")
+        if not isinstance(dps, dict) or not dps:
+            return False
+
+        self.device.online = True
+        self.device.update_from_dps(dps)
+        return True
+
+    def receive_push_update(self) -> bool:
+        """Maintain the persistent local session and merge fresh DP updates.
+
+        A controlled 30-second status reconciliation follows LocalTuya's
+        established persistent-session pattern. A queued push can be returned
+        by ``status()``; it is still a valid DP snapshot and is applied exactly
+        like a normal push update.
         """
         with self._io_lock:
             if not self._tuya or not self._connected:
                 return False
+
+            now = time.monotonic()
+            if now - self._last_status_refresh >= self._status_refresh_interval:
+                try:
+                    response = self._tuya.status()
+                except Exception as exc:  # noqa: BLE001
+                    _LOGGER.debug("Local status reconciliation failed: %s", exc)
+                    self._reset_connection()
+                    self.device.online = False
+                    return False
+
+                self._last_status_refresh = now
+                self._last_heartbeat = now
+                if self._apply_local_response(response, "status reconciliation"):
+                    return True
+                if not self._tuya or not self._connected:
+                    return False
 
             try:
                 response = self._tuya.receive()
@@ -625,29 +681,25 @@ class InkbirdAPI:
                 now = time.monotonic()
                 if now - self._last_heartbeat >= self._heartbeat_interval:
                     try:
-                        self._tuya.heartbeat()
-                        self._last_heartbeat = now
+                        heartbeat = self._tuya.heartbeat()
                     except Exception as exc:  # noqa: BLE001
                         _LOGGER.debug("Local heartbeat failed: %s", exc)
                         self._reset_connection()
                         self.device.online = False
+                        return False
+                    if isinstance(heartbeat, dict) and heartbeat.get("Err"):
+                        _LOGGER.debug(
+                            "Local heartbeat returned Tuya error %s", heartbeat["Err"]
+                        )
+                        self._reset_connection()
+                        self.device.online = False
+                        return False
+                    self._last_heartbeat = now
                 return False
 
-            if not isinstance(response, dict):
-                return False
-            if "Err" in response:
-                _LOGGER.debug("Local push receive returned Tuya error %s", response["Err"])
-                self._reset_connection()
-                self.device.online = False
-                return False
-
-            dps = response.get("dps")
-            if not isinstance(dps, dict) or not dps:
-                return False
-
-            self.device.online = True
-            self.device.update_from_dps(dps)
-            return True
+            return self._apply_local_response(
+                response, "push receive", allow_no_update=True
+            )
 
     def close(self) -> None:
         """Close all transports during integration unload."""
