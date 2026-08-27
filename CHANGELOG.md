@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-08-27
+
+### Fixed
+- Correct IIC-800 local manual-zone starts: encode each requested DP45 duration in bytes 2–17 rather than bytes 18–33.
+- For IIC-800 local control, set DP101 to `Manual`, wait briefly for the mode change, then send the Base64-encoded DP45 raw payload required by TinyTuya. The same sequence applies to single- and multi-zone starts.
+
+### Thanks
+- @luisvicesc for validating the corrected local protocol sequence on a physical IIC-800-WIFI controller ([#5](https://github.com/ac-uy/ha-inkbird-irrigation/pull/5)).
+
 ## [0.7.13] - 2026-08-26
 
 ### Changed
