@@ -273,10 +273,11 @@ def encode_dp45_start_manual(durations: dict[int, int], num_zones: int = 8) -> b
     payload[1] = 0x01  # target = specific stations
 
     # Bytes 2-17: manual duration per zone
-for zone in range(1, num_zones + 1):
-    dur = durations.get(zone, 0)
-    offset = 2 + (zone - 1) * 2
-    struct.pack_into(">H", payload, offset, dur)
+    for zone in range(1, num_zones + 1):
+        dur = durations.get(zone, 0)
+        offset = 2 + (zone - 1) * 2
+        struct.pack_into(">H", payload, offset, dur)
+
     return bytes(payload)
 
 
