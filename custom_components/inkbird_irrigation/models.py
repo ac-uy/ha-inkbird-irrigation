@@ -272,11 +272,10 @@ def encode_dp45_start_manual(durations: dict[int, int], num_zones: int = 8) -> b
     payload[0] = 0x01  # command = start/reset manual irrigation
     payload[1] = 0x01  # target = specific stations
 
-    # Bytes 2-17: running time per zone (initially 0 — device fills in as zones run)
-    # Bytes 18-33: single-use duration per zone
+    # Bytes 2-17: manual duration per zone
     for zone in range(1, num_zones + 1):
         dur = durations.get(zone, 0)
-        offset = 18 + (zone - 1) * 2
+        offset = 2 + (zone - 1) * 2
         struct.pack_into(">H", payload, offset, dur)
 
     return bytes(payload)
