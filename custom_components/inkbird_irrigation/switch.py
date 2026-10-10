@@ -40,6 +40,7 @@ async def async_setup_entry(
         entities.append(InkbirdRainSensorSwitch(coordinator))
         entities.append(InkbirdSkipScheduleSwitch(coordinator))
     else:
+        entities.append(InkbirdPowerSwitch800(coordinator))
         entities.append(InkbirdRainSensorSwitch800(coordinator))
         entities.append(InkbirdTimerAlarmSwitch(coordinator))
         entities.append(InkbirdCancelAlarmVoiceSwitch(coordinator))
@@ -194,6 +195,58 @@ class InkbirdSkipScheduleSwitch(InkbirdEntity, SwitchEntity):
 
 
 # ─── IIC-800 System Switches ──────────────────────────────────────────────────
+
+
+class InkbirdPowerSwitch800(InkbirdEntity, SwitchEntity):
+    """Master power switch for DP45 controllers (IIC-400/600 v3.5/800).
+
+    DP45 controllers have no dedicated power DP. Instead, the whole system is
+    shut down by setting the operation mode (DP 101) to "OFF", and brought back
+    by setting it to "Auto" (resume scheduled operation). Turning this off stops
+    any running irrigation; turning it on re-enables the controller's schedule.
+    """
+
+    _attr_icon = "mdi:power"
+
+    def __init__(self, coordinator: InkbirdCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{DOMAIN}_{self._device_id}_power"
+        self._attr_name = "Power"
+
+    @property
+    def is_on(self) -> bool:
+        # device.power_switch is derived from operation_mode != "OFF".
+        return self.coordinator.api.device.power_switch
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Resume controller operation (DP 101 -> Auto)."""
+        success = await self.hass.async_add_executor_job(
+            self.coordinator.api.set_operation_mode, "Auto"
+        )
+        if not success:
+            raise HomeAssistantError("Failed to power on the irrigation system")
+        # Optimistic update so the UI reflects the change immediately.
+        device = self.coordinator.api.device
+        device.operation_mode = "Auto"
+        device.power_switch = True
+        device.system_power = "on"
+        self.coordinator.async_set_updated_data(device)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Shut the whole system down (DP 101 -> OFF)."""
+        success = await self.hass.async_add_executor_job(
+            self.coordinator.api.set_operation_mode, "OFF"
+        )
+        if not success:
+            raise HomeAssistantError("Failed to power off the irrigation system")
+        # Optimistic update so the UI reflects the change immediately.
+        device = self.coordinator.api.device
+        device.operation_mode = "OFF"
+        device.power_switch = False
+        device.system_power = "off"
+        self.coordinator.async_set_updated_data(device)
+        await self.coordinator.async_request_refresh()
 
 
 class InkbirdRainSensorSwitch800(InkbirdEntity, SwitchEntity):

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-10
+
+### Added
+- Master **Power** switch for DP45 controllers (IIC-400 / IIC-600 v3.5 / IIC-800).
+  These models have no dedicated power DP, so the whole system is shut down by
+  setting the operation mode (DP 101) to `OFF` and resumed by setting it to
+  `Auto`. Turning the switch off stops any running irrigation and disables the
+  controller; turning it on re-enables scheduled operation. This brings the
+  IIC-800 to parity with the IIC-600, which already had a Power switch.
+
+### Thanks
+- @sruggiu for requesting a general system on/off toggle for the IIC-800
+  ([#3](https://github.com/ac-uy/ha-inkbird-irrigation/issues/3)).
+
 ## [0.7.14] - 2026-08-27
 
 ### Fixed

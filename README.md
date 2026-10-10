@@ -108,6 +108,16 @@ A failed Local verification restores the prior listener with the unchanged confi
 | `select.inkbird_iic_600_connection_preference` | Select | Requested transport: Auto, Local, or Cloud |
 | `sensor.inkbird_iic_600_connection_mode` | Sensor | Active transport (`local`, `cloud`, or `unavailable`) |
 
+Entity names use the detected model (e.g. `iic_800`, `iic_400`) in place of `iic_600`,
+and the DP45-based controllers (IIC-400 / IIC-600 v3.5 / IIC-800) expose 8/4/6 zones
+accordingly.
+
+**Power switch (all models):** every controller exposes a `switch.*_power` entity that
+turns the whole system off and on. On the IIC-600 it maps to the dedicated power DP; on
+the DP45 controllers (IIC-400 / IIC-600 v3.5 / IIC-800), which have no power DP, it sets
+the operation mode (DP 101) to `OFF` to shut down and `Auto` to resume scheduled
+operation.
+
 ## Connection Modes and Cloud Fallback (Optional)
 
 The integration keeps one persistent local Tuya session for event-driven updates. Its listener runs as a Home Assistant background task, so waiting for device updates never delays Home Assistant startup. Optional Tuya Cloud credentials add a **Connection preference** selector:
