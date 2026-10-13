@@ -25,10 +25,11 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = []
 
-    # Zone countdown sensors are available only on legacy IIC-600 DPs.
-    if profile.zone_control_method == "countdown":
-        for zone in range(1, profile.num_zones + 1):
-            entities.append(InkbirdZoneCountdownSensor(coordinator, zone))
+    # Zone "time remaining" countdown sensors for both models. The IIC-600 reads
+    # its per-zone countdown DPs directly; the IIC-800 derives remaining time from
+    # the DP45 payload (configured duration minus minutes elapsed).
+    for zone in range(1, profile.num_zones + 1):
+        entities.append(InkbirdZoneCountdownSensor(coordinator, zone))
 
     # Zone elapsed time sensors (both models)
     for zone in range(1, profile.num_zones + 1):
@@ -88,6 +89,16 @@ class InkbirdZoneElapsedSensor(InkbirdEntity, SensorEntity):
     def native_value(self) -> float:
         """Return elapsed time in minutes."""
         device = self.coordinator.api.device
+
+        # IIC-800 reports per-run elapsed minutes directly in the DP45 payload,
+        # so use that device value rather than an HA-side timer. (The legacy
+        # per-zone "use_time" DP is a lifetime cumulative counter and must not be
+        # shown here.)
+        if self.coordinator.api.profile.zone_control_method == "bitmask_raw":
+            return device.zone_running_time.get(self._zone, 0)
+
+        # IIC-600 has no per-run elapsed DP, so measure it HA-side from when the
+        # zone became active.
         countdown = device.zone_countdown.get(self._zone, 0)
         switch_active = device.zone_active.get(self._zone, False)
         is_running = switch_active or countdown > 0

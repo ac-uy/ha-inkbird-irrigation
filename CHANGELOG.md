@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-13
+
+### Fixed
+- IIC-800 per-zone **time remaining** and **time elapsed**. The DP45 payload
+  already carries both the configured single-use duration and the minutes a zone
+  has been running, but these were collapsed into one field, so the card showed
+  `0 min remaining` and the elapsed sensor surfaced a lifetime cumulative value.
+  The integration now keeps them separate: a *Zone N time remaining* sensor is
+  created for the IIC-800 (derived as `duration − elapsed`), and *Zone N time
+  elapsed* reports the real per-run minutes from DP45 instead of the cumulative
+  counter.
+
+### Thanks
+- @sruggiu for the detailed report and screenshots
+  ([#4](https://github.com/ac-uy/ha-inkbird-irrigation-card/issues/4)).
+
 ## [0.8.0] - 2026-10-10
 
 ### Added

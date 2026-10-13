@@ -67,6 +67,10 @@ class InkbirdDevice:
         self.zone_active: dict[int, bool] = {z: False for z in range(1, num + 1)}
         self.zone_countdown: dict[int, int] = {z: 0 for z in range(1, num + 1)}
         self.zone_duration: dict[int, int] = {z: 0 for z in range(1, num + 1)}
+        # IIC-800 DP45 split: minutes elapsed this run vs configured single-use
+        # duration, kept separate so remaining = duration - elapsed can be derived.
+        self.zone_running_time: dict[int, int] = {z: 0 for z in range(1, num + 1)}
+        self.zone_config_duration: dict[int, int] = {z: 0 for z in range(1, num + 1)}
 
         # IIC-800 specific state
         self.irrigation_mode: str = "order"  # "order" / "together"
@@ -238,11 +242,25 @@ class InkbirdDevice:
         data = self.irrigation_time_all
         parsed = decode_dp45(data, self.profile.num_zones)
 
-        # Use running_time if zones are active, otherwise show duration
         for zone in range(1, self.profile.num_zones + 1):
             running = parsed["running_time"].get(zone, 0)
             duration = parsed["duration"].get(zone, 0)
-            # Show running time if non-zero (zone is active), else show configured duration
+
+            # Keep the two DP45 values separate so the sensors can expose a real
+            # per-run elapsed and a derived remaining time, instead of collapsing
+            # them into one ambiguous field.
+            self.zone_running_time[zone] = running
+            self.zone_config_duration[zone] = duration
+
+            # Backward-compatible single field (used by the IIC-800 countdown
+            # sensor as "remaining"): minutes left in the current run.
+            # running_time is minutes elapsed so far, duration is the configured
+            # single-use length, so remaining = duration - elapsed (never < 0).
+            remaining = duration - running
+            self.zone_countdown[zone] = remaining if remaining > 0 else 0
+
+            # Preserve prior behavior for anything still reading zone_duration:
+            # show the live running figure when active, else the configured one.
             self.zone_duration[zone] = running if running > 0 else duration
 
 
