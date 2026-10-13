@@ -50,7 +50,12 @@ async def async_setup_entry(
 
 
 class InkbirdZoneCountdownSensor(InkbirdEntity, SensorEntity):
-    """Sensor showing remaining time for a zone (IIC-600)."""
+    """Sensor showing remaining time for a zone.
+
+    IIC-600 reads its per-zone countdown DP directly. IIC-800 derives the
+    remaining minutes from the DP45 payload (configured duration minus the
+    minutes the zone has been running).
+    """
 
     _attr_native_unit_of_measurement = "min"
     _attr_icon = "mdi:timer-outline"
@@ -66,6 +71,24 @@ class InkbirdZoneCountdownSensor(InkbirdEntity, SensorEntity):
     def native_value(self) -> int:
         """Return the countdown in minutes."""
         return self.coordinator.api.device.zone_countdown.get(self._zone, 0)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose the DP45 split and raw payload on IIC-800 for diagnostics.
+
+        These make it possible to confirm — from the entity's attributes, with
+        no debug logging — whether the device's running field counts up
+        (elapsed) or down, which determines the remaining-time derivation.
+        """
+        if self.coordinator.api.profile.zone_control_method != "bitmask_raw":
+            return {}
+        device = self.coordinator.api.device
+        raw = device.irrigation_time_all
+        return {
+            "running_minutes": device.zone_running_time.get(self._zone, 0),
+            "configured_duration_minutes": device.zone_config_duration.get(self._zone, 0),
+            "dp45_raw_hex": raw.hex() if isinstance(raw, (bytes, bytearray)) and raw else "",
+        }
 
 
 class InkbirdZoneElapsedSensor(InkbirdEntity, SensorEntity):

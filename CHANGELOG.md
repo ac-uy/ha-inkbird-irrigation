@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elapsed* reports the real per-run minutes from DP45 instead of the cumulative
   counter.
 
+### Added
+- IIC-800 *Zone N time remaining* sensors expose diagnostic attributes
+  (`running_minutes`, `configured_duration_minutes`, `dp45_raw_hex`) so the raw
+  DP45 timing can be read straight from the entity's attributes in Developer
+  Tools, without enabling debug logging.
+
 ### Thanks
 - @sruggiu for the detailed report and screenshots
   ([#4](https://github.com/ac-uy/ha-inkbird-irrigation-card/issues/4)).
