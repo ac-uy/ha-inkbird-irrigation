@@ -292,16 +292,26 @@ def encode_dp45_query() -> bytes:
 def decode_dp45(data: bytes, num_zones: int = 8) -> dict[str, Any]:
     """Decode a 34-byte DP 45 payload.
 
+    Byte layout (confirmed against live IIC-800 captures, 0-indexed,
+    big-endian 16-bit words):
+        Byte 0: command type (0=query, 1=start/reset, 2=auto report)
+        Byte 1: target (0=all, 1=specific)
+        Bytes 2-17:  per-zone REMAINING time, counts DOWN (zone N at 2+(N-1)*2)
+        Bytes 18-33: per-zone ELAPSED time,   counts UP   (zone N at 18+(N-1)*2)
+    While a zone runs, remaining decreases and elapsed increases; their sum is
+    the configured single-use duration for that run.
+
     Returns dict with:
-        command_type: int (0=query, 1=start/reset, 2=auto report)
-        target: int (0=all, 1=specific)
-        running_time: dict[int, int] — zone -> minutes currently running
-        duration: dict[int, int] — zone -> single-use duration in minutes
+        command_type, target: int
+        remaining: dict[int, int] — zone -> minutes left in the current run
+        elapsed:   dict[int, int] — zone -> minutes run so far
+        duration:  dict[int, int] — zone -> remaining + elapsed (configured)
     """
     result: dict[str, Any] = {
         "command_type": 0,
         "target": 0,
-        "running_time": {},
+        "remaining": {},
+        "elapsed": {},
         "duration": {},
     }
 
@@ -313,10 +323,13 @@ def decode_dp45(data: bytes, num_zones: int = 8) -> dict[str, Any]:
     result["target"] = data[1]
 
     for zone in range(1, num_zones + 1):
-        rt_offset = 2 + (zone - 1) * 2
-        dur_offset = 18 + (zone - 1) * 2
-        result["running_time"][zone] = struct.unpack_from(">H", data, rt_offset)[0]
-        result["duration"][zone] = struct.unpack_from(">H", data, dur_offset)[0]
+        rem_offset = 2 + (zone - 1) * 2
+        ela_offset = 18 + (zone - 1) * 2
+        remaining = struct.unpack_from(">H", data, rem_offset)[0]
+        elapsed = struct.unpack_from(">H", data, ela_offset)[0]
+        result["remaining"][zone] = remaining
+        result["elapsed"][zone] = elapsed
+        result["duration"][zone] = remaining + elapsed
 
     return result
 

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-16
+
+### Fixed
+- IIC-800 per-zone **time remaining** and **time elapsed** now report correct
+  live values. Two bugs from v0.8.1, confirmed against live DP45 captures:
+  - Raw DP45 arriving as a **base64** string (over the Tuya cloud) was stored as
+    literal text instead of being decoded, so the whole payload was garbage.
+    `_parse_raw_dp` now decodes hex **or** base64.
+  - The DP45 byte layout was interpreted backwards. It is actually bytes 2–17 =
+    per-zone remaining (counts down), bytes 18–33 = elapsed (counts up). Remaining
+    is now read directly; elapsed is derived HA-side by latching the configured
+    duration at the start of a run (`elapsed = duration − remaining`), which is
+    robust against the firmware placing the elapsed bytes inconsistently.
+
+### Thanks
+- @sruggiu for the exhaustive DP45 captures and reverse-engineering that pinned
+  down the exact byte layout
+  ([#4](https://github.com/ac-uy/ha-inkbird-irrigation-card/issues/4)).
+
 ## [0.8.1] - 2026-10-13
 
 ### Fixed

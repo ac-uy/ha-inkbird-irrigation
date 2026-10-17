@@ -71,6 +71,11 @@ class InkbirdDevice:
         # duration, kept separate so remaining = duration - elapsed can be derived.
         self.zone_running_time: dict[int, int] = {z: 0 for z in range(1, num + 1)}
         self.zone_config_duration: dict[int, int] = {z: 0 for z in range(1, num + 1)}
+        # Configured duration latched when a zone's run starts (remaining jumps
+        # 0 -> N), used to derive a reliable elapsed = latched - remaining. The
+        # device's own elapsed bytes are placed inconsistently, so we don't
+        # trust them; remaining (DP45 bytes 2-17) is reliable per-zone.
+        self._zone_latched_duration: dict[int, int] = {z: 0 for z in range(1, num + 1)}
 
         # IIC-800 specific state
         self.irrigation_mode: str = "order"  # "order" / "together"
@@ -217,11 +222,21 @@ class InkbirdDevice:
         if isinstance(raw, bytes):
             return raw
         if isinstance(raw, str):
-            # tinytuya may return raw DPs as hex strings
+            # Raw DPs arrive as a hex string over local tinytuya, but as a
+            # base64 string over the Tuya cloud. Try hex first, then base64,
+            # before giving up — never fall back to encoding the literal text
+            # (that silently stored the base64 string itself and broke decoding).
+            s = raw.strip()
             try:
-                return bytes.fromhex(raw)
+                return bytes.fromhex(s)
             except ValueError:
-                return raw.encode()
+                pass
+            try:
+                # b64decode raises binascii.Error (a ValueError subclass) on bad input.
+                return base64.b64decode(s, validate=True)
+            except ValueError:
+                _LOGGER.warning("Could not parse raw DP value as hex or base64: %r", raw)
+                return b""
         if isinstance(raw, int):
             # Tuya reports some "raw" DPs as integers — convert to 4 big-endian bytes
             import struct
@@ -231,37 +246,50 @@ class InkbirdDevice:
         return b""
 
     def _decode_zone_durations(self) -> None:
-        """Decode per-zone durations from irrigation_time_all (DP 45).
+        """Decode per-zone remaining/elapsed from irrigation_time_all (DP 45).
 
-        The raw payload is 34 bytes:
-          Byte 0: command type (0=query, 1=start/reset, 2=auto report)
-          Byte 1: target (0=all, 1=specific)
-          Bytes 2-17: stations 1-8 running time (2 bytes each, big-endian, minutes)
-          Bytes 18-33: stations 1-8 single-use duration (2 bytes each, big-endian, minutes)
+        Confirmed against live IIC-800 captures (big-endian 16-bit words):
+          Byte 0: command type   Byte 1: target
+          Bytes 2-17:  per-zone REMAINING time (counts down) — reliable per zone
+          Bytes 18-33: ELAPSED time (counts up) — the firmware places the active
+                       run's elapsed inconsistently (not always in the running
+                       zone's own slot), so we do NOT trust these bytes.
+
+        We take remaining straight from the device, then derive elapsed HA-side:
+        on a 0 -> N transition we latch N as the run's configured duration, and
+        while the zone runs elapsed = latched_duration - remaining. This stays
+        correct regardless of how the device fills the elapsed bytes.
         """
         data = self.irrigation_time_all
         parsed = decode_dp45(data, self.profile.num_zones)
 
         for zone in range(1, self.profile.num_zones + 1):
-            running = parsed["running_time"].get(zone, 0)
-            duration = parsed["duration"].get(zone, 0)
+            remaining = parsed["remaining"].get(zone, 0)
+            prev_remaining = self.zone_countdown.get(zone, 0)
 
-            # Keep the two DP45 values separate so the sensors can expose a real
-            # per-run elapsed and a derived remaining time, instead of collapsing
-            # them into one ambiguous field.
-            self.zone_running_time[zone] = running
-            self.zone_config_duration[zone] = duration
+            if remaining > 0:
+                # Latch the configured duration when the run first appears (or
+                # when remaining increases, e.g. a fresh start that is longer).
+                if remaining > self._zone_latched_duration[zone]:
+                    self._zone_latched_duration[zone] = remaining
+                latched = self._zone_latched_duration[zone]
+                elapsed = latched - remaining
+            else:
+                # Zone idle/stopped: clear the run state.
+                self._zone_latched_duration[zone] = 0
+                elapsed = 0
 
-            # Backward-compatible single field (used by the IIC-800 countdown
-            # sensor as "remaining"): minutes left in the current run.
-            # running_time is minutes elapsed so far, duration is the configured
-            # single-use length, so remaining = duration - elapsed (never < 0).
-            remaining = duration - running
-            self.zone_countdown[zone] = remaining if remaining > 0 else 0
+            # The card's "time remaining" countdown reads zone_countdown directly.
+            self.zone_countdown[zone] = remaining
+            # Per-run elapsed (derived, robust) and configured duration.
+            self.zone_running_time[zone] = elapsed if elapsed > 0 else 0
+            self.zone_config_duration[zone] = self._zone_latched_duration[zone]
 
-            # Preserve prior behavior for anything still reading zone_duration:
-            # show the live running figure when active, else the configured one.
-            self.zone_duration[zone] = running if running > 0 else duration
+            # Anything reading zone_duration: show the live elapsed figure while
+            # running, else the configured duration.
+            self.zone_duration[zone] = (
+                elapsed if remaining > 0 else self._zone_latched_duration[zone]
+            )
 
 
 
