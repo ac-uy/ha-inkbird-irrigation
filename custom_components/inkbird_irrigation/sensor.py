@@ -2,16 +2,39 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import time as time_mod
+from typing import Any
+
+import voluptuous as vol
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import InkbirdCoordinator
 from .entity import InkbirdEntity
+from .models import CYCLE_INTERVAL, CYCLE_WEEKLY
+
+WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]  # bit 0 = Sunday
+
+SERVICE_SET_SCHEDULE = "set_schedule"
+SERVICE_REFRESH_SCHEDULES = "refresh_schedules"
+SET_SCHEDULE_SCHEMA = {
+    vol.Required("duration"): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
+    vol.Optional("start_times", default=[]): vol.All(
+        cv.ensure_list, [cv.time], vol.Length(max=6)
+    ),
+    vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=9)),
+    vol.Optional("weekdays"): vol.All(cv.ensure_list, [vol.In(WEEKDAYS)]),
+    vol.Optional("start_date"): cv.date,
+}
 
 
 async def async_setup_entry(
@@ -34,6 +57,18 @@ async def async_setup_entry(
     # Zone elapsed time sensors (both models)
     for zone in range(1, profile.num_zones + 1):
         entities.append(InkbirdZoneElapsedSensor(coordinator, zone))
+
+    # Legacy IIC-600: per-station schedule stored on the controller (DP 104)
+    if profile.dp_schedule_menu:
+        for zone in range(1, profile.num_zones + 1):
+            entities.append(InkbirdScheduleSensor(coordinator, zone))
+        platform = entity_platform.async_get_current_platform()
+        platform.async_register_entity_service(
+            SERVICE_SET_SCHEDULE, SET_SCHEDULE_SCHEMA, "async_set_schedule"
+        )
+        platform.async_register_entity_service(
+            SERVICE_REFRESH_SCHEDULES, {}, "async_refresh_schedules"
+        )
 
     # System sensors
     entities.append(InkbirdModeSensor(coordinator))
@@ -290,3 +325,100 @@ class InkbirdMergeHistorySensor(InkbirdEntity, SensorEntity):
                 if self.coordinator.api.device.merge_history_raw else "",
             }
         return {}
+
+
+class InkbirdScheduleSensor(InkbirdEntity, SensorEntity):
+    """Schedule stored on a legacy IIC-600 for one station (DP 104).
+
+    The state summarises the schedule; attributes carry the decoded fields.
+    Use the ``inkbird_irrigation.set_schedule`` service on this entity to
+    write a new schedule to the controller.
+    """
+
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator: InkbirdCoordinator, zone: int) -> None:
+        super().__init__(coordinator)
+        self._zone = zone
+        self._attr_unique_id = f"{DOMAIN}_{self._device_id}_zone_{zone}_schedule"
+        self._attr_name = f"Zone {zone} schedule"
+
+    @property
+    def _schedule(self) -> Any:
+        return self.coordinator.api.device.schedules.get(self._zone)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return a short summary, e.g. '6 min at 21:00, every 1 day'."""
+        s = self._schedule
+        if s is None:
+            return None
+        if not s.enabled:
+            return "off"
+        times = ", ".join(f"{h:02d}:{m:02d}" for h, m in s.start_times)
+        if s.cycle_mode == CYCLE_INTERVAL:
+            repeat = f"every {s.days} day" + ("s" if s.days != 1 else "")
+        elif s.cycle_mode == CYCLE_WEEKLY:
+            repeat = ", ".join(
+                d.capitalize() for i, d in enumerate(WEEKDAYS) if s.days & (1 << i)
+            )
+        else:
+            repeat = f"cycle {s.cycle_mode}"
+        return f"{s.duration_minutes} min at {times}, {repeat}"[:255]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        s = self._schedule
+        if s is None:
+            return {}
+        attrs: dict[str, Any] = {
+            "duration": s.duration_minutes,
+            "start_times": [f"{h:02d}:{m:02d}" for h, m in s.start_times],
+            "cycle_mode": s.cycle_mode,
+            "start_date": "%04d-%02d-%02d" % s.start_date,
+            "flags": s.flags,
+        }
+        if s.cycle_mode == CYCLE_INTERVAL:
+            attrs["interval_days"] = s.days
+        elif s.cycle_mode == CYCLE_WEEKLY:
+            attrs["weekdays"] = [d for i, d in enumerate(WEEKDAYS) if s.days & (1 << i)]
+        return attrs
+
+    async def async_refresh_schedules(self) -> None:
+        """Ask the controller to report all stored schedules."""
+        ok = await self.hass.async_add_executor_job(self.coordinator.api.query_schedules)
+        if not ok:
+            raise HomeAssistantError("Schedule query failed (local connection required)")
+
+    async def async_set_schedule(
+        self,
+        duration: int,
+        start_times: list[dt.time],
+        interval_days: int | None = None,
+        weekdays: list[str] | None = None,
+        start_date: dt.date | None = None,
+    ) -> None:
+        """Write this station's schedule to the controller."""
+        if (interval_days is None) == (weekdays is None):
+            raise ServiceValidationError("Give either interval_days or weekdays")
+        if duration > 0 and not start_times:
+            raise ServiceValidationError("Give at least one start time")
+        if weekdays is not None:
+            cycle, days = CYCLE_WEEKLY, sum(1 << WEEKDAYS.index(d) for d in set(weekdays))
+        else:
+            cycle, days = CYCLE_INTERVAL, int(interval_days)
+        date = start_date or dt_util.now().date()
+        try:
+            ok = await self.hass.async_add_executor_job(
+                self.coordinator.api.set_schedule,
+                self._zone,
+                duration,
+                [(t.hour, t.minute) for t in start_times],
+                cycle,
+                days,
+                (date.year, date.month, date.day),
+            )
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        if not ok:
+            raise HomeAssistantError("Schedule write failed (local connection required)")

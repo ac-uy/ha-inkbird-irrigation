@@ -136,6 +136,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     api.freeze_model()
     await coordinator.async_start_listener()
+    if api.profile.dp_query_device and connected:
+        # Legacy IIC-600: ask for the stored schedules (DP 104) once the
+        # listener runs, so the per-station replies are not missed.
+        await hass.async_add_executor_job(api.query_schedules)
     return True
 
 

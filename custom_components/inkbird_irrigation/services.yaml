@@ -1,0 +1,38 @@
+set_schedule:
+  target:
+    entity:
+      integration: inkbird_irrigation
+      domain: sensor
+  fields:
+    duration:
+      required: true
+      example: 10
+      selector:
+        number:
+          min: 0
+          max: 180
+          unit_of_measurement: min
+    start_times:
+      example: ["06:30"]
+      selector:
+        object:
+    interval_days:
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 9
+    weekdays:
+      example: ["mon", "wed", "fri"]
+      selector:
+        select:
+          multiple: true
+          options: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    start_date:
+      selector:
+        date:
+refresh_schedules:
+  target:
+    entity:
+      integration: inkbird_irrigation
+      domain: sensor
