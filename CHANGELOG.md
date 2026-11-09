@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inkbird_irrigation.set_schedule` / `refresh_schedules` services. Schedules
   are queried at startup via DP 108 `query_device`. Local transport only (the
   Tuya v1.0 command API rejects these custom codes).
+- Legacy IIC-600: `clock` sensor (`ok` / `error`) from DP 106
+  `ht1381a_timeerror`, which reports when the controller's clock lost its time.
 
 ## [0.8.2] - 2026-10-16
 

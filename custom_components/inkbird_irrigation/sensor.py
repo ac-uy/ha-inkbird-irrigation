@@ -8,7 +8,7 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -60,6 +60,7 @@ async def async_setup_entry(
 
     # Legacy IIC-600: per-station schedule stored on the controller (DP 104)
     if profile.dp_schedule_menu:
+        entities.append(InkbirdClockSensor(coordinator))
         for zone in range(1, profile.num_zones + 1):
             entities.append(InkbirdScheduleSensor(coordinator, zone))
         platform = entity_platform.async_get_current_platform()
@@ -422,3 +423,24 @@ class InkbirdScheduleSensor(InkbirdEntity, SensorEntity):
             raise ServiceValidationError(str(err)) from err
         if not ok:
             raise HomeAssistantError("Schedule write failed (local connection required)")
+
+
+class InkbirdClockSensor(InkbirdEntity, SensorEntity):
+    """Clock state of a legacy IIC-600 (DP 106 ht1381a_timeerror).
+
+    ``error`` means the controller's clock lost its time (typically after a
+    power cut), so stored schedules may run at the wrong time or not at all.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["ok", "error"]
+    _attr_icon = "mdi:clock-check-outline"
+
+    def __init__(self, coordinator: InkbirdCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{DOMAIN}_{self._device_id}_clock"
+        self._attr_name = "Clock"
+
+    @property
+    def native_value(self) -> str:
+        return "error" if self.coordinator.api.device.timeerror_alarm else "ok"

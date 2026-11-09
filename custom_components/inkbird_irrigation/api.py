@@ -153,6 +153,11 @@ class InkbirdDevice:
         if str(DP_QUEUED_ZONE) in dps:
             self.queued_zone = int(dps[str(DP_QUEUED_ZONE)])
 
+        # Clock error (DP 106): the controller's clock lost its time
+        dp_clock = self.profile.dp_timeerror_alarm
+        if dp_clock and str(dp_clock) in dps:
+            self.timeerror_alarm = bool(dps[str(dp_clock)])
+
         # Schedule record (DP 104): one station per report
         dp_sched = self.profile.dp_schedule_menu
         if dp_sched and str(dp_sched) in dps:

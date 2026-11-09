@@ -106,6 +106,7 @@ A failed Local verification restores the prior listener with the unchanged confi
 | `sensor.inkbird_iic_600_zone_1_time_elapsed` - `zone_6` | Sensor | Elapsed time (minutes running) |
 | `sensor.inkbird_iic_600_mode` | Sensor | Operating mode (auto/manual) |
 | `sensor.inkbird_iic_600_zone_1_schedule` - `zone_6` | Sensor | Schedule stored on the controller (legacy IIC-600 only) |
+| `sensor.inkbird_iic_600_clock` | Sensor | `ok` / `error` — controller clock lost its time, DP 106 (legacy IIC-600 only) |
 | `select.inkbird_iic_600_connection_preference` | Select | Requested transport: Auto, Local, or Cloud |
 | `sensor.inkbird_iic_600_connection_mode` | Sensor | Active transport (`local`, `cloud`, or `unavailable`) |
 

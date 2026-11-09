@@ -110,6 +110,7 @@ IIC_600_PROFILE = DeviceProfile(
     dp_schedule_menu=104,        # scheduled_menu (Raw)
     dp_power_switch=107,         # main_switch
     dp_query_device=108,         # query_device (write-only)
+    dp_timeerror_alarm=106,      # ht1381a_timeerror: clock lost its time (read-only)
     dp_auto_remaining=109,       # auto_remaining_time
     dp_active_zone_bitmask=110,
     dp_queued_zone_bitmask=111,
