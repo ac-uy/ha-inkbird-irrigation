@@ -105,6 +105,7 @@ A failed Local verification restores the prior listener with the unchanged confi
 | `sensor.inkbird_iic_600_zone_1_time_remaining` - `zone_6` | Sensor | Countdown (minutes remaining) |
 | `sensor.inkbird_iic_600_zone_1_time_elapsed` - `zone_6` | Sensor | Elapsed time (minutes running) |
 | `sensor.inkbird_iic_600_mode` | Sensor | Operating mode (auto/manual) |
+| `sensor.inkbird_iic_600_zone_1_schedule` - `zone_6` | Sensor | Schedule stored on the controller (legacy IIC-600 only) |
 | `select.inkbird_iic_600_connection_preference` | Select | Requested transport: Auto, Local, or Cloud |
 | `sensor.inkbird_iic_600_connection_mode` | Sensor | Active transport (`local`, `cloud`, or `unavailable`) |
 
@@ -185,6 +186,24 @@ automation:
           entity_id: switch.inkbird_iic_600_zone_1
 ```
 
+### Store a schedule on the controller (legacy IIC-600)
+
+The legacy IIC-600 keeps one schedule per station in its own memory (DP 104) and
+waters on its own, even without Home Assistant or Wi-Fi. The `zone_N_schedule`
+sensors show what is stored (read at startup; `inkbird_irrigation.refresh_schedules`
+re-reads it). Write a new one with `inkbird_irrigation.set_schedule`
+(local connection required):
+
+```yaml
+action: inkbird_irrigation.set_schedule
+target:
+  entity_id: sensor.inkbird_iic_600_zone_1_schedule
+data:
+  duration: 6            # minutes, 0 disables the station
+  start_times: ["21:00"] # up to six
+  interval_days: 1       # every N days (1-9) ... or: weekdays: [mon, wed, fri]
+```
+
 ## Technical Details
 
 - **Protocol**: Tuya local protocol varies by controller. The last protocol that returned a valid DP snapshot is stored in the config entry and tried first on later local reconnects.
@@ -242,10 +261,13 @@ python local/probe_device.py
 | 40 | Main valve control | str (`"on"`/`"off"`) | Read/Write |
 | 43 | Skip schedule | bool | Read/Write |
 | 101 | Mode | str (`"auto"`/`"manual"`) | Read |
-| 102 | Power switch | bool | Read/Write |
-| 103 | Auto-irrigation remaining time | int (minutes) | Read |
-| 107 | Rain sensor enabled | bool | Read/Write |
-| 109 | Seasonal adjustment | int (%) | Read/Write |
+| 102 | Rain sensor enabled (`RainSen_TotalONOFF`) | bool | Read/Write |
+| 103 | Seasonal adjustment (`SeaAdjValue`, -90..100, step 10) | int (%) | Read/Write |
+| 104 | Schedule record (`scheduled_menu`), one station per report | raw (20 bytes) | Read/Write |
+| 105 | Reset device (`ResetDevice`) — factory reset, never written | bool | Write |
+| 107 | Power / master switch (`main_switch`) | bool | Read/Write |
+| 108 | Query device (`query_device`) — reports all DP 104 records | bool | Write |
+| 109 | Auto-irrigation remaining time (`auto_remaining_time`) | int (minutes) | Read |
 | 110 | Active zone bitmask | int | Read (Write to start zone with duration) |
 | 111 | Queued zone bitmask | int | Read |
 

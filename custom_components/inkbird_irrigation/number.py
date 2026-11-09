@@ -88,15 +88,11 @@ class InkbirdSeasonalAdjust(InkbirdEntity, NumberEntity):
         self._attr_unique_id = f"{DOMAIN}_{self._device_id}_seasonal_adjust"
         self._attr_name = "Seasonal adjustment"
 
-        # DP45 controllers use the -90 to 100 range with 10% steps.
-        if coordinator.api.profile.zone_control_method == "bitmask_raw":
-            self._attr_native_min_value = -90
-            self._attr_native_max_value = 100
-            self._attr_native_step = 10
-        else:
-            self._attr_native_min_value = 0
-            self._attr_native_max_value = 100
-            self._attr_native_step = 1
+        # All known models (DP45 controllers and the legacy IIC-600, whose
+        # thing model declares SeaAdjValue -90..100 step 10) use this range.
+        self._attr_native_min_value = -90
+        self._attr_native_max_value = 100
+        self._attr_native_step = 10
 
     @property
     def native_value(self) -> float:

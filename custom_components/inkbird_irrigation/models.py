@@ -63,6 +63,10 @@ class DeviceProfile:
     dp_cancel_alarm_voice: int | None = None    # DP 109 — cancel alarm voice (Boolean)
     dp_merge_history: int | None = None         # DP 104 — history (Raw 4 bytes)
 
+    # Legacy IIC-600 specific DPs
+    dp_schedule_menu: int | None = None         # DP 104 — scheduled_menu (Raw, 20 bytes, one station per report)
+    dp_query_device: int | None = None          # DP 108 — query_device (write-only Boolean)
+
     # Control semantics
     zone_control_method: str = "countdown"  # "countdown" (IIC-600) or "bitmask_raw" (IIC-800)
 
@@ -78,7 +82,7 @@ class DeviceProfile:
             "dp_active_zone_bitmask", "dp_queued_zone_bitmask",
             "dp_normal_time", "dp_irrigation_mode", "dp_irrigation_time_all",
             "dp_operation_mode", "dp_reset_device", "dp_timeerror_alarm",
-            "dp_cancel_alarm_voice", "dp_merge_history",
+            "dp_cancel_alarm_voice", "dp_merge_history", "dp_schedule_menu",
         ):
             val = getattr(self, attr, None)
             if val is not None:
@@ -100,10 +104,13 @@ IIC_600_PROFILE = DeviceProfile(
     dp_system_power=40,
     dp_skip_schedule=43,
     dp_mode=101,
-    dp_power_switch=102,
-    dp_auto_remaining=103,
-    dp_rain_sensor=107,
-    dp_seasonal_adjust=109,
+    # Verified against the Tuya thing model of product 84gsrkjckfcfu829.
+    dp_rain_sensor=102,          # RainSen_TotalONOFF
+    dp_seasonal_adjust=103,      # SeaAdjValue (-90..100, step 10)
+    dp_schedule_menu=104,        # scheduled_menu (Raw)
+    dp_power_switch=107,         # main_switch
+    dp_query_device=108,         # query_device (write-only)
+    dp_auto_remaining=109,       # auto_remaining_time
     dp_active_zone_bitmask=110,
     dp_queued_zone_bitmask=111,
     zone_control_method="countdown",
@@ -390,6 +397,115 @@ def decode_dp38(data: bytes) -> list[ScheduleChannel]:
         channels.append(ch)
 
     return channels
+
+
+# ─── Legacy IIC-600 DP 104 (scheduled_menu) ─────────────────────────────────
+#
+# Verified on an IIC-600-WIFI (product 84gsrkjckfcfu829). Writing DP 108
+# (query_device) makes the controller report DP 104 once per station, so a
+# full read is six consecutive DP 104 updates. Writing one 20-byte record to
+# DP 104 replaces that station's schedule. Unlike DP 38 on the DP45 models,
+# the start times are NOT (hour, minute) pairs: all six hours come first.
+#
+#   Byte 0:      station (1-6)
+#   Byte 1:      duration in minutes (0 = station disabled)
+#   Bytes 2-7:   start hours 1-6   (0xFF = unused)
+#   Bytes 8-13:  start minutes 1-6 (0xFF = unused)
+#   Byte 14:     cycle mode (0 = weekly, 3 = interval; 1/2 odd/even untested)
+#   Byte 15:     weekday bitmask (bit 0 = Sun .. bit 6 = Sat) or interval days
+#   Bytes 16-18: start date (year - 2000, month, day)
+#   Byte 19:     flags; the INKBIRD app stores 0x10 on configured stations,
+#                empty stations report 0x11 (meaning not decoded)
+#
+# Example read from a device: station 1, 6 min at 21:00 every day since
+# 2026-04-01 = 01 06 15 FF FF FF FF FF 00 FF FF FF FF FF 03 01 1A 04 01 10
+
+IIC600_SCHEDULE_LENGTH = 20
+IIC600_SCHEDULE_FLAGS = 0x10
+CYCLE_WEEKLY = 0
+CYCLE_INTERVAL = 3
+
+
+@dataclass
+class Iic600Schedule:
+    """One station's schedule from legacy IIC-600 DP 104."""
+
+    station: int = 0
+    duration_minutes: int = 0
+    start_times: list[tuple[int, int]] = field(default_factory=list)  # (hour, minute)
+    cycle_mode: int = 0
+    days: int = 0  # weekday bitmask (weekly) or interval in days (interval)
+    start_date: tuple[int, int, int] = (0, 0, 0)  # (year, month, day)
+    flags: int = 0
+
+    @property
+    def enabled(self) -> bool:
+        """Return True when the station has a duration and a start time."""
+        return self.duration_minutes > 0 and bool(self.start_times)
+
+
+def decode_iic600_schedule(data: bytes) -> Iic600Schedule | None:
+    """Decode one legacy IIC-600 DP 104 schedule record."""
+    if not data or len(data) < IIC600_SCHEDULE_LENGTH:
+        return None
+    sched = Iic600Schedule(
+        station=data[0],
+        duration_minutes=data[1],
+        cycle_mode=data[14],
+        days=data[15],
+        start_date=(2000 + data[16], data[17], data[18]),
+        flags=data[19],
+    )
+    for i in range(6):
+        hour, minute = data[2 + i], data[8 + i]
+        if hour != 0xFF and minute != 0xFF:
+            sched.start_times.append((hour, minute))
+    return sched
+
+
+def encode_iic600_schedule(
+    station: int,
+    duration_minutes: int,
+    start_times: list[tuple[int, int]],
+    cycle_mode: int,
+    days: int,
+    start_date: tuple[int, int, int],
+) -> bytes:
+    """Encode one legacy IIC-600 DP 104 schedule record.
+
+    Args:
+        station: 1-6.
+        duration_minutes: 0-180 (0 disables the station).
+        start_times: up to six (hour, minute) tuples.
+        cycle_mode: CYCLE_WEEKLY (days = weekday bitmask, bit 0 = Sunday) or
+            CYCLE_INTERVAL (days = every N days, 1-9).
+        start_date: (year, month, day) the interval counts from.
+    """
+    if not 1 <= station <= 6:
+        raise ValueError("station must be 1-6")
+    if not 0 <= duration_minutes <= 180:
+        raise ValueError("duration must be 0-180 minutes")
+    if len(start_times) > 6:
+        raise ValueError("at most six start times")
+    for hour, minute in start_times:
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("invalid start time")
+    if cycle_mode == CYCLE_WEEKLY:
+        if not 1 <= days <= 0x7F:
+            raise ValueError("weekly schedule needs at least one weekday")
+    elif cycle_mode == CYCLE_INTERVAL:
+        if not 1 <= days <= 9:
+            raise ValueError("interval must be 1-9 days")
+    else:
+        raise ValueError("cycle_mode must be weekly (0) or interval (3)")
+    year, month, day = start_date
+    times = sorted(start_times) + [(0xFF, 0xFF)] * (6 - len(start_times))
+    return bytes(
+        [station, duration_minutes]
+        + [h for h, _ in times]
+        + [m for _, m in times]
+        + [cycle_mode, days, year - 2000, month, day, IIC600_SCHEDULE_FLAGS]
+    )
 
 
 # ─── DP 104 Decoding (Merge_History) ─────────────────────────────────────────

@@ -35,7 +35,9 @@ from .models import (
     decode_dp45,
     decode_dp104,
     decode_dp38,
+    decode_iic600_schedule,
     encode_dp45_start_manual,
+    encode_iic600_schedule,
     detect_model_from_dps,
     get_profile,
 )
@@ -89,6 +91,8 @@ class InkbirdDevice:
         self.merge_history: int = 0
         self.merge_history_raw: bytes = b""  # DP 104 raw bytes
         self.merge_history_parsed: Any = None  # MergeHistoryEntry
+        # Legacy IIC-600 DP 104: station -> Iic600Schedule (filled by query_schedules)
+        self.schedules: dict[int, Any] = {}
 
     def update_from_dps(self, dps: dict[str, Any]) -> None:
         """Update device state from Tuya data points."""
@@ -148,6 +152,13 @@ class InkbirdDevice:
             self.active_zone = int(dps[str(DP_ACTIVE_ZONE)])
         if str(DP_QUEUED_ZONE) in dps:
             self.queued_zone = int(dps[str(DP_QUEUED_ZONE)])
+
+        # Schedule record (DP 104): one station per report
+        dp_sched = self.profile.dp_schedule_menu
+        if dp_sched and str(dp_sched) in dps:
+            sched = decode_iic600_schedule(self._parse_raw_dp(dps[str(dp_sched)]))
+            if sched and 1 <= sched.station <= self.profile.num_zones:
+                self.schedules[sched.station] = sched
 
     def _update_iic800(self, dps: dict[str, Any]) -> None:
         """Parse DPs for IIC-800."""
@@ -1192,6 +1203,42 @@ class InkbirdAPI:
             _LOGGER.error("Failed to set DP %d: %s", dp, exc)
             self._reset_connection()
             return False
+
+    def query_schedules(self) -> bool:
+        """Ask a legacy IIC-600 to report every station's schedule (DP 104).
+
+        The controller answers with one DP 104 update per station, which the
+        normal DP listener parses into ``device.schedules``. Local only: the
+        Tuya v1.0 command API rejects these custom codes.
+        """
+        dp = self._profile.dp_query_device
+        if dp is None or self._using_cloud:
+            return False
+        return self.set_dp(dp, True)
+
+    def set_schedule(
+        self,
+        station: int,
+        duration_minutes: int,
+        start_times: list[tuple[int, int]],
+        cycle_mode: int,
+        days: int,
+        start_date: tuple[int, int, int],
+    ) -> bool:
+        """Write one station's schedule to a legacy IIC-600 (DP 104).
+
+        Raises ValueError for out-of-range input. Local only.
+        """
+        dp = self._profile.dp_schedule_menu
+        if dp is None or self._using_cloud:
+            return False
+        record = encode_iic600_schedule(
+            station, duration_minutes, start_times, cycle_mode, days, start_date
+        )
+        if not self.set_dp(dp, base64.b64encode(record).decode("ascii")):
+            return False
+        # The controller does not echo the write; read the stations back.
+        return self.query_schedules()
 
     def set_irrigation_mode(self, mode: str) -> bool:
         """Set irrigation mode on a DP45 controller ('order' or 'together')."""

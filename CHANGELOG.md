@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Legacy IIC-600 (`84gsrkjckfcfu829`): DPs 102/103/107/109 were mapped to the
+  wrong functions. Verified against the device's Tuya thing model, they are
+  102 `RainSen_TotalONOFF` (rain sensor), 103 `SeaAdjValue` (seasonal adjust,
+  -90..100 step 10), 107 `main_switch` (power) and 109 `auto_remaining_time`.
+  The Power and Rain sensor switches now write the right DP (unique IDs are
+  unchanged), and the seasonal adjustment uses the -90..100 / step 10 range.
+
+### Added
+- Legacy IIC-600: read and write the schedule stored on the controller
+  (DP 104 `scheduled_menu`). New `zone_N_schedule` sensors, and the
+  `inkbird_irrigation.set_schedule` / `refresh_schedules` services. Schedules
+  are queried at startup via DP 108 `query_device`. Local transport only (the
+  Tuya v1.0 command API rejects these custom codes).
+
 ## [0.8.2] - 2026-10-16
 
 ### Fixed

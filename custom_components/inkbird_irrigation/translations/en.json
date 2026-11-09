@@ -50,5 +50,37 @@
       "already_configured": "This device is already configured.",
       "reconfigure_successful": "Connection details were verified, saved, and the integration was reloaded."
     }
+  },
+  "services": {
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Write a station's schedule into the controller's own memory (legacy IIC-600). The controller then waters on its own, even without Home Assistant or Wi-Fi.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "Minutes per run, 0 disables the station."
+        },
+        "start_times": {
+          "name": "Start times",
+          "description": "Up to six start times (HH:MM)."
+        },
+        "interval_days": {
+          "name": "Every N days",
+          "description": "Run every 1-9 days, counted from the start date. Use this or weekdays."
+        },
+        "weekdays": {
+          "name": "Weekdays",
+          "description": "Run on these weekdays. Use this or interval days."
+        },
+        "start_date": {
+          "name": "Start date",
+          "description": "Date the interval counts from. Defaults to today."
+        }
+      }
+    },
+    "refresh_schedules": {
+      "name": "Refresh schedules",
+      "description": "Ask the controller to report every station's stored schedule."
+    }
   }
 }

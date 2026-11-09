@@ -146,10 +146,10 @@ class InkbirdPowerSwitch(InkbirdEntity, SwitchEntity):
         return self.coordinator.api.device.power_switch
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.async_set_dp(102, True)
+        await self.async_set_dp(self.coordinator.api.profile.dp_power_switch, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.async_set_dp(102, False)
+        await self.async_set_dp(self.coordinator.api.profile.dp_power_switch, False)
 
 
 class InkbirdRainSensorSwitch(InkbirdEntity, SwitchEntity):
@@ -167,10 +167,10 @@ class InkbirdRainSensorSwitch(InkbirdEntity, SwitchEntity):
         return self.coordinator.api.device.rain_sensor_enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.async_set_dp(107, True)
+        await self.async_set_dp(self.coordinator.api.profile.dp_rain_sensor, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.async_set_dp(107, False)
+        await self.async_set_dp(self.coordinator.api.profile.dp_rain_sensor, False)
 
 
 class InkbirdSkipScheduleSwitch(InkbirdEntity, SwitchEntity):
