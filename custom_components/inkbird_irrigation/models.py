@@ -66,6 +66,24 @@ class DeviceProfile:
     # Control semantics
     zone_control_method: str = "countdown"  # "countdown" (IIC-600) or "bitmask_raw" (IIC-800)
 
+    # DP 45 payload length in bytes, used for manual-start commands and to
+    # disambiguate hex vs base64 reports. 34 on the IIC-800 (2 + 4 x 8 zones).
+    dp45_length: int = 34
+
+    # --- Capabilities: what live telemetry this model actually provides ---
+    # Default True so existing models keep their behaviour; set False only
+    # where live hardware testing proved the data is unavailable/meaningless.
+
+    # The device reports DP 45 in status(), so per-zone remaining/elapsed time
+    # can be derived from it. The IIC-400 treats DP 45 as a write-only start
+    # command and never reports it, so this is False there.
+    supports_dp45_readback: bool = True
+
+    # DP 104 (Merge_History) decodes into meaningful data worth exposing. On the
+    # IIC-400 it is a volatile history scroll that does not track the active
+    # zone (confirmed on real hardware), so this is False there.
+    supports_merge_history: bool = True
+
     def get_all_dps(self) -> list[int]:
         """Return all known DP IDs for this device model."""
         dps: set[int] = set()
@@ -136,12 +154,13 @@ IIC_600_PROFILE = DeviceProfile(
 #   Bytes 16-18: interval start date (year_offset, month, day)
 #   Byte 19: rain sensor follow (0=ignore, 1=follow)
 #
-# DP 104 Format (4 bytes, read-only, big-endian):
-#   Bytes 0-1 (big-endian uint16): total irrigation time in minutes
-#   Byte 2: irrigation channel number
-#   Byte 3:
+# DP 104 Format (Tuya "value" integer, read-only; bytes of the big-endian uint32):
+#   Byte 0:
 #     bits 7-4: auto(0) or manual(1)
-#     bits 3-0: valve state
+#     bits 3-0: valve state (1=open, 0=closed)
+#   Byte 1: irrigation channel number
+#   Bytes 2-3 (big-endian uint16): total irrigation time in minutes
+#   e.g. 268500997 = 0x10010005 -> manual, valve closed, channel 1, 5 minutes
 
 IIC_800_PROFILE = DeviceProfile(
     model=DeviceModel.IIC_800,
@@ -216,16 +235,19 @@ IIC_600_V35_PROFILE = DeviceProfile(
 # - 4 zones instead of 8
 # - Tuya protocol v3.5
 # - DP 110 and DP 111 are simple booleans (NOT bitmasks like the IIC-600)
-# - DP 38 schedule string first byte = 0x04 (4 zones)
+# - DP 38 is pushed as one 20-byte block per station (first byte = station
+#   1..4); a status snapshot carries the last block, so its first byte is 0x04
+# - DP 45 is 18 bytes (2 + 4 x 4 zones), reported base64-encoded, e.g.
+#   "AAEAAAAAAAAAAAAAAAAAAAAA" when idle (issue #1 capture)
 # - Product ID is unknown at this time
 #
-# DP 110: Boolean — purpose TBD (possibly rain delay or similar)
-# DP 111: Boolean — purpose TBD (possibly rain delay or similar)
+# DP 110 / DP 111: Booleans. On the six-zone IIC-600 v3.5 schema (issue #4)
+# they are "device_upgrade" and "master_switch"; unverified on the IIC-400.
 
 IIC_400_PROFILE = DeviceProfile(
     model=DeviceModel.IIC_400,
     num_zones=4,
-    product_id="",  # Unknown — community testers needed
+    product_id="x7hkmeis8yqj6ntj",  # confirmed 2026-11-21 from a live IIC-400-WIFI
     category="ggq",
     tuya_version=3.5,
     dp_zone_switch={},  # No individual zone switch DPs
@@ -249,26 +271,39 @@ IIC_400_PROFILE = DeviceProfile(
     dp_cancel_alarm_voice=109,
     dp_merge_history=104,
     zone_control_method="bitmask_raw",
+    dp45_length=18,  # 2 + 4 x 4 zones, as reported by the device
+    # DP 45 is write-only on the IIC-400 (never in status()), and DP 104 is a
+    # volatile history scroll — both confirmed on real hardware 2026-11-21.
+    supports_dp45_readback=False,
+    supports_merge_history=False,
 )
 
 
 # ─── DP 45 Encoding/Decoding (IIC-800) ───────────────────────────────────────
 
-DP45_LENGTH = 34  # Expected payload length
+DP45_LENGTH = 34  # IIC-800 payload length (2 + 4 bytes per zone x 8 zones)
 
 
-def encode_dp45_start_manual(durations: dict[int, int], num_zones: int = 8) -> bytes:
+def dp45_min_length(num_zones: int) -> int:
+    """Return the shortest DP 45 payload carrying both words for every zone."""
+    return 2 + 4 * num_zones
+
+
+def encode_dp45_start_manual(
+    durations: dict[int, int], num_zones: int = 8, length: int = DP45_LENGTH
+) -> bytes:
     """Encode a DP 45 payload to START manual irrigation on specific zones.
 
     Args:
         durations: dict mapping zone (1-8) to duration in minutes.
                    Zones with 0 or missing entries won't run.
         num_zones: number of zones (default 8).
+        length: payload length in bytes (34 on the IIC-800, 18 on the IIC-400).
 
     Returns:
-        34-byte payload.
+        ``length``-byte payload.
     """
-    payload = bytearray(DP45_LENGTH)
+    payload = bytearray(max(length, dp45_min_length(num_zones)))
     payload[0] = 0x01  # command = start/reset manual irrigation
     payload[1] = 0x01  # target = specific stations
 
@@ -290,14 +325,16 @@ def encode_dp45_query() -> bytes:
 
 
 def decode_dp45(data: bytes, num_zones: int = 8) -> dict[str, Any]:
-    """Decode a 34-byte DP 45 payload.
+    """Decode a DP 45 payload (34 bytes on the IIC-800, 18 on the IIC-400).
 
     Byte layout (confirmed against live IIC-800 captures, 0-indexed,
     big-endian 16-bit words):
         Byte 0: command type (0=query, 1=start/reset, 2=auto report)
         Byte 1: target (0=all, 1=specific)
-        Bytes 2-17:  per-zone REMAINING time, counts DOWN (zone N at 2+(N-1)*2)
-        Bytes 18-33: per-zone ELAPSED time,   counts UP   (zone N at 18+(N-1)*2)
+        First half after the header:  per-zone REMAINING time, counts DOWN
+            (zone N at 2+(N-1)*2; bytes 2-17 on the IIC-800)
+        Second half:                  per-zone ELAPSED time, counts UP
+            (bytes 18-33 on the IIC-800, 10-17 on the IIC-400)
     While a zone runs, remaining decreases and elapsed increases; their sum is
     the configured single-use duration for that run.
 
@@ -315,16 +352,19 @@ def decode_dp45(data: bytes, num_zones: int = 8) -> dict[str, Any]:
         "duration": {},
     }
 
-    if len(data) < DP45_LENGTH:
+    if len(data) < dp45_min_length(num_zones):
         # Graceful handling of short payloads
         return result
 
     result["command_type"] = data[0]
     result["target"] = data[1]
+    # The elapsed block starts halfway through the per-zone area, which also
+    # covers a device reporting more zone slots than it has stations.
+    elapsed_base = 2 + (len(data) - 2) // 2
 
     for zone in range(1, num_zones + 1):
         rem_offset = 2 + (zone - 1) * 2
-        ela_offset = 18 + (zone - 1) * 2
+        ela_offset = elapsed_base + (zone - 1) * 2
         remaining = struct.unpack_from(">H", data, rem_offset)[0]
         elapsed = struct.unpack_from(">H", data, ela_offset)[0]
         result["remaining"][zone] = remaining
@@ -407,22 +447,24 @@ class MergeHistoryEntry:
 def decode_dp104(data: bytes) -> MergeHistoryEntry:
     """Decode DP 104 (Merge_History) — 4 bytes, read-only.
 
-    The integer is stored big-endian. Layout of the 4 big-endian bytes:
-        data[0:2] (big-endian uint16): total irrigation time in minutes
-        data[2]: irrigation channel number
-        data[3]:
+    The integer is stored big-endian. Layout of the 4 big-endian bytes, per the
+    Tuya schema and live IIC-400/600 v3.5/800 values:
+        data[0]:
             bits 7-4: auto(0) or manual(1)
-            bits 3-0: valve state
+            bits 3-0: valve state (1=open, 0=closed)
+        data[1]: irrigation channel number
+        data[2:4] (big-endian uint16): total irrigation time in minutes
+    e.g. 268500997 = 0x10010005 -> manual, valve closed, channel 1, 5 minutes.
     """
     entry = MergeHistoryEntry()
 
     if not data or len(data) < 4:
         return entry
 
-    entry.total_time_minutes = struct.unpack_from(">H", data, 0)[0]
-    entry.channel = data[2]
-    entry.is_manual = ((data[3] >> 4) & 0x0F) != 0
-    entry.valve_state = data[3] & 0x0F
+    entry.is_manual = ((data[0] >> 4) & 0x0F) != 0
+    entry.valve_state = data[0] & 0x0F
+    entry.channel = data[1]
+    entry.total_time_minutes = struct.unpack_from(">H", data, 2)[0]
 
     return entry
 
@@ -439,6 +481,8 @@ PROFILES: dict[DeviceModel, DeviceProfile] = {
 # Product IDs used for auto-detection
 PRODUCT_ID_MAP: dict[str, DeviceModel] = {
     "h71ip90tp4mfd6mx": DeviceModel.IIC_800,
+    "x7hkmeis8yqj6ntj": DeviceModel.IIC_400,
+    "ln52teq4wpifvfcl": DeviceModel.IIC_600_V35,
 }
 
 # DPs that uniquely identify a model (used for auto-detection from status)
