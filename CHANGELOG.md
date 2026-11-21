@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **IIC-400-WIFI confirmed working on real hardware.** Local control was
+  validated end-to-end against a physical IIC-400 (Tuya protocol v3.5): model
+  auto-detection, per-zone start/stop, and mode/status reporting were all
+  verified live (see [#1](https://github.com/ac-uy/ha-inkbird-irrigation/issues/1)).
+- IIC-400 model auto-detection by its Tuya product id (`x7hkmeis8yqj6ntj`).
+- Per-model capability flags on `DeviceProfile` — `supports_dp45_readback` and
+  `supports_merge_history` — so entities that rely on data a given model does
+  not actually provide are no longer created for that model.
+
+### Fixed
+- **IIC-400:** DP45 is write-only on this model and is never returned by
+  `status()`, not even while a zone is running. The per-zone *time remaining*
+  and *time elapsed* sensors (which derive from a readable DP45) are no longer
+  created for the IIC-400 instead of showing permanently empty values; live zone
+  state comes from DP107/DP108 (active/queued bitmasks). This supersedes the
+  earlier "size the DP45 payload from the zone count" attempt, which could not
+  help because the device never reports DP45.
+- **IIC-400:** the manual-start DP45 encoder is now validated on hardware. An
+  18-byte payload (`01 01` followed by one big-endian minutes word per zone in
+  the first half) starts exactly the requested zone.
+- **IIC-400:** the *Last irrigation time* sensor (DP104) is no longer created
+  for this model. Only DP104's first byte (auto/manual flag + valve state) is
+  reliable here; its channel and minutes fields are a volatile history scroll
+  that does not track the active zone (identical output whether zone 1 or zone 4
+  runs, confirmed on hardware).
+- **IIC-400:** the idle DP45 base64/hex ambiguity fix is retained — raw DPs are
+  decoded as hex or base64, choosing the length that matches the model.
+- **DP45 controllers (IIC-600 v3.5 / IIC-800):** the *Last irrigation time*
+  sensor (DP104) read its bytes in the wrong order, e.g. `268500997` showed
+  4097 min on channel 0 instead of 5 min on channel 1 (manual). The layout is
+  now `[flags, channel, minutes_hi, minutes_lo]`, matching the Tuya schema. The
+  IIC-400 is excluded (see above).
+
+### Notes
+- **IIC-400:** a disconnected zone valve cannot be detected over the protocol.
+  The controller energises the output and reports the zone as running
+  regardless, and no datapoint reflects a missing solenoid.
+
 ## [0.8.2] - 2026-10-16
 
 ### Fixed

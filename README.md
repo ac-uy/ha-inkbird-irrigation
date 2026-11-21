@@ -28,7 +28,7 @@ A custom Home Assistant integration for the **Inkbird IIC-600-WIFI** smart irrig
 | IIC-600 WIFI | ✅ Fully supported with the legacy DP layout |
 | IIC-600 WIFI (v3.5 / DP45) | 🧪 Beta — six-zone DP45 profile; please report results |
 | IIC-800 WIFI | 🧪 Beta — local manual zone starts validated on a physical controller; additional community results welcome |
-| IIC-400 WIFI | ⚠️ Experimental (untested — community testers needed! See [issue #1](https://github.com/ac-uy/ha-inkbird-irrigation/issues/1)) |
+| IIC-400 WIFI | 🧪 Beta — four-zone DP45 profile; local control validated on a physical IIC-400-WIFI (Tuya protocol v3.5). Additional community results welcome (see [issue #1](https://github.com/ac-uy/ha-inkbird-irrigation/issues/1)) |
 
 ## Prerequisites
 
@@ -109,7 +109,7 @@ A failed Local verification restores the prior listener with the unchanged confi
 | `sensor.inkbird_iic_600_connection_mode` | Sensor | Active transport (`local`, `cloud`, or `unavailable`) |
 
 Entity names use the detected model (e.g. `iic_800`, `iic_400`) in place of `iic_600`,
-and the DP45-based controllers (IIC-400 / IIC-600 v3.5 / IIC-800) expose 8/4/6 zones
+and the DP45-based controllers (IIC-400 / IIC-600 v3.5 / IIC-800) expose 4/6/8 zones
 accordingly.
 
 **Power switch (all models):** every controller exposes a `switch.*_power` entity that
@@ -192,6 +192,7 @@ automation:
 - **Dependency**: TinyTuya is pinned to `1.19.0`, matching the version used by the installed Tuya Local integration's tested persistent-session implementation.
 - **Polling interval**: Event-driven local updates over one persistent Tuya session, with a non-waiting 10-second heartbeat and a 30-second read-only status reconciliation. The connection limits TinyTuya to one internal retry; the coordinator owns the bounded socket reset and protocol-rediscovery policy. On a local failure, it retries the persisted verified protocol first and performs one serialized v3.4/v3.3/v3.5 rediscovery cycle only after every third failed recovery attempt.
 - **IIC-800 local manual starts**: The controller requires DP101 to be set to `Manual` before DP45. Manual zone durations are big-endian words in DP45 bytes 2–17; the integration sends the resulting raw payload Base64-encoded for TinyTuya. This sequence has been validated on a physical IIC-800-WIFI using Tuya protocol v3.4.
+- **IIC-400 local manual starts**: Same sequence as the IIC-800 (set DP101 to `Manual`, then write an 18-byte DP45 payload with per-zone big-endian minutes in the first half, Base64-encoded for TinyTuya), validated on a physical IIC-400-WIFI using Tuya protocol v3.5. On this model DP45 is **write-only** — it is never returned by `status()`, even while a zone runs — so the per-zone *time remaining*/*elapsed* and *Last irrigation time* (DP104) sensors are not exposed; live zone state comes from DP107/DP108. A disconnected valve is not detectable: the output is energised and reported as running regardless.
 - **Session-lock limitation**: These transport safeguards reduce stale-session and retry churn risks, but cannot unlock a controller that has already begun rejecting every authenticated local session. That controller-side state requires a recovery action outside the local Tuya protocol.
 - **Startup recovery**: If neither selected transport is initially reachable, the config entry stays loaded with unavailable entities. Its first local retry waits 30 seconds, then uses capped background recovery instead of repeatedly re-running Home Assistant entry setup.
 - **Stable topology**: Model auto-detection runs before platforms are created. After setup, the integration retains that profile so a later recovery response cannot replace entities with an incompatible model layout.
