@@ -25,15 +25,19 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = []
 
-    # Zone "time remaining" countdown sensors for both models. The IIC-600 reads
-    # its per-zone countdown DPs directly; the IIC-800 derives remaining time from
-    # the DP45 payload (configured duration minus minutes elapsed).
-    for zone in range(1, profile.num_zones + 1):
-        entities.append(InkbirdZoneCountdownSensor(coordinator, zone))
-
-    # Zone elapsed time sensors (both models)
-    for zone in range(1, profile.num_zones + 1):
-        entities.append(InkbirdZoneElapsedSensor(coordinator, zone))
+    # Per-zone "time remaining"/"elapsed" sensors need a live source: the IIC-600
+    # reads dedicated countdown/elapsed DPs, while the DP45 controllers derive
+    # them from the DP45 status payload. The IIC-400 never reports DP45 (it is
+    # write-only there), so it gets neither sensor instead of empty ones.
+    zone_timing_available = (
+        profile.zone_control_method == "countdown"
+        or profile.supports_dp45_readback
+    )
+    if zone_timing_available:
+        for zone in range(1, profile.num_zones + 1):
+            entities.append(InkbirdZoneCountdownSensor(coordinator, zone))
+        for zone in range(1, profile.num_zones + 1):
+            entities.append(InkbirdZoneElapsedSensor(coordinator, zone))
 
     # System sensors
     entities.append(InkbirdModeSensor(coordinator))
@@ -44,7 +48,8 @@ async def async_setup_entry(
         entities.append(InkbirdIrrigationModeSensor(coordinator))
         entities.append(InkbirdActiveZoneBitmaskSensor(coordinator))
         entities.append(InkbirdQueuedZoneBitmaskSensor(coordinator))
-        entities.append(InkbirdMergeHistorySensor(coordinator))
+        if profile.supports_merge_history:
+            entities.append(InkbirdMergeHistorySensor(coordinator))
 
     async_add_entities(entities)
 

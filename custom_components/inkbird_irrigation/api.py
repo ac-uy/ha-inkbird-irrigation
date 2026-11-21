@@ -185,7 +185,7 @@ class InkbirdDevice:
         # Irrigation time all — raw bytes with per-zone durations (DP 45)
         if p.dp_irrigation_time_all and str(p.dp_irrigation_time_all) in dps:
             raw = dps[str(p.dp_irrigation_time_all)]
-            self.irrigation_time_all = self._parse_raw_dp(raw)
+            self.irrigation_time_all = self._parse_raw_dp(raw, p.dp45_length)
             self._decode_zone_durations()
 
         # Normal time — schedule raw bytes (DP 38)
@@ -194,8 +194,10 @@ class InkbirdDevice:
             self.normal_time_raw = self._parse_raw_dp(raw)
             self.normal_time = raw if isinstance(raw, str) else raw.hex() if isinstance(raw, bytes) else str(raw)
 
-        # Merge history (DP 104) — 4 bytes raw
-        if p.dp_merge_history and str(p.dp_merge_history) in dps:
+        # Merge history (DP 104) — 4 bytes raw. Skipped on models where it does
+        # not decode into meaningful data (e.g. the IIC-400), so no stale/
+        # misleading value is stored.
+        if p.supports_merge_history and p.dp_merge_history and str(p.dp_merge_history) in dps:
             raw = dps[str(p.dp_merge_history)]
             self.merge_history_raw = self._parse_raw_dp(raw)
             self.merge_history_parsed = decode_dp104(self.merge_history_raw)
@@ -217,26 +219,40 @@ class InkbirdDevice:
         self.system_power = "on" if self.power_switch else "off"
 
     @staticmethod
-    def _parse_raw_dp(raw: Any) -> bytes:
-        """Convert a raw DP value to bytes."""
+    def _parse_raw_dp(raw: Any, expected_len: int | None = None) -> bytes:
+        """Convert a raw DP value to bytes.
+
+        ``expected_len`` disambiguates strings that are valid as both hex and
+        base64: the IIC-400's idle DP45 "AAEAAAAAAAAAAAAAAAAAAAAA" is 18 bytes
+        of base64, but also parses as 12 bytes of hex.
+        """
         if isinstance(raw, bytes):
             return raw
         if isinstance(raw, str):
-            # Raw DPs arrive as a hex string over local tinytuya, but as a
-            # base64 string over the Tuya cloud. Try hex first, then base64,
-            # before giving up — never fall back to encoding the literal text
-            # (that silently stored the base64 string itself and broke decoding).
+            # Raw DPs can arrive as a hex string or as a base64 string depending
+            # on transport and model. Prefer the decoding whose length matches
+            # the expected payload, else hex then base64 — never fall back to
+            # encoding the literal text (that silently stored the base64 string
+            # itself and broke decoding).
             s = raw.strip()
+            candidates: list[bytes] = []
             try:
-                return bytes.fromhex(s)
+                candidates.append(bytes.fromhex(s))
             except ValueError:
                 pass
             try:
                 # b64decode raises binascii.Error (a ValueError subclass) on bad input.
-                return base64.b64decode(s, validate=True)
+                candidates.append(base64.b64decode(s, validate=True))
             except ValueError:
+                pass
+            if not candidates:
                 _LOGGER.warning("Could not parse raw DP value as hex or base64: %r", raw)
                 return b""
+            if expected_len is not None:
+                for candidate in candidates:
+                    if len(candidate) == expected_len:
+                        return candidate
+            return candidates[0]
         if isinstance(raw, int):
             # Tuya reports some "raw" DPs as integers — convert to 4 big-endian bytes
             import struct
@@ -944,15 +960,17 @@ class InkbirdAPI:
     # ─── IIC-800 Zone Control ──────────────────────────────────────────────────
 
     def _encode_zone_durations_800(self, durations: dict[int, int]) -> bytes:
-        """Encode per-zone durations as 34-byte raw payload for DP 45.
+        """Encode per-zone durations as the raw DP 45 payload.
 
-        Format (34 bytes):
+        Format (``profile.dp45_length`` bytes: 34 on IIC-800, 18 on IIC-400):
           Byte 0 = 0x01 (start manual irrigation)
           Byte 1 = 0x01 (specific stations)
-          Bytes 2-17: running time per zone (set to 0, device fills in)
-          Bytes 18-33: single-use duration per zone (2 bytes each, big-endian, minutes)
+          Then one big-endian minutes word per zone (bytes 2-17 on IIC-800);
+          the remaining bytes stay 0.
         """
-        return encode_dp45_start_manual(durations, self._profile.num_zones)
+        return encode_dp45_start_manual(
+            durations, self._profile.num_zones, self._profile.dp45_length
+        )
 
     def _turn_on_zone_800(self, zone: int, duration_minutes: int) -> bool:
         """Start a zone on IIC-800.
@@ -1049,8 +1067,11 @@ class InkbirdAPI:
     def _turn_on_zone_800_multi(self, durations: dict[int, int]) -> bool:
         """Start multiple zones on IIC-800 with individual durations.
 
-        Sends DP 45 as a 34-byte payload (command=start, target=specific,
-        durations in bytes 18-33) then sets DP 101 to "Manual".
+        Sets DP 101 to "Manual" first, then writes DP 45 (profile.dp45_length
+        bytes: 34 on IIC-800, 18 on IIC-400; command=start, target=specific)
+        with the per-zone durations in the FIRST half (bytes 2.., one
+        big-endian minutes word per zone). Validated live on an IIC-400:
+        zone 1 for 1 min -> 010100010000000000000000000000000000.
 
         Args:
             durations: dict mapping zone number (1-8) to duration in minutes.
