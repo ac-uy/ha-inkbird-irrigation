@@ -43,7 +43,8 @@ async def async_setup_entry(
         entities.append(InkbirdPowerSwitch800(coordinator))
         entities.append(InkbirdRainSensorSwitch800(coordinator))
         entities.append(InkbirdTimerAlarmSwitch(coordinator))
-        entities.append(InkbirdCancelAlarmVoiceSwitch(coordinator))
+        if profile.supports_cancel_alarm_voice:
+            entities.append(InkbirdCancelAlarmVoiceSwitch(coordinator))
 
     async_add_entities(entities)
 
