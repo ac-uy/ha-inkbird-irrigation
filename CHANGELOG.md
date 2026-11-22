@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auto-detection, per-zone start/stop, and mode/status reporting were all
   verified live (see [#1](https://github.com/ac-uy/ha-inkbird-irrigation/issues/1)).
 - IIC-400 model auto-detection by its Tuya product id (`x7hkmeis8yqj6ntj`).
-- Per-model capability flags on `DeviceProfile` — `supports_dp45_readback` and
-  `supports_merge_history` — so entities that rely on data a given model does
-  not actually provide are no longer created for that model.
+- Per-model capability flags on `DeviceProfile` — `supports_dp45_readback`,
+  `supports_merge_history`, and `supports_cancel_alarm_voice` — so entities that
+  rely on data a given model does not actually provide are no longer created for
+  that model.
 
 ### Fixed
 - **IIC-400:** DP45 is write-only on this model and is never returned by
@@ -33,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reliable here; its channel and minutes fields are a volatile history scroll
   that does not track the active zone (identical output whether zone 1 or zone 4
   runs, confirmed on hardware).
+- **IIC-400:** the *Cancel alarm voice* switch (DP109) is no longer created for
+  this model. DP109 never appears in `status()` on the IIC-400 (a write-only
+  command at most), so the switch could only ever show a permanently stale state.
 - **IIC-400:** the idle DP45 base64/hex ambiguity fix is retained — raw DPs are
   decoded as hex or base64, choosing the length that matches the model.
 - **DP45 controllers (IIC-600 v3.5 / IIC-800):** the *Last irrigation time*

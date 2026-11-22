@@ -84,6 +84,11 @@ class DeviceProfile:
     # zone (confirmed on real hardware), so this is False there.
     supports_merge_history: bool = True
 
+    # DP 109 (cancel_alarm_voice) is reported in status() and can back a stateful
+    # switch. On the IIC-400 it never appears in status() (write-only command at
+    # most), so the switch would be permanently stale; this is False there.
+    supports_cancel_alarm_voice: bool = True
+
     def get_all_dps(self) -> list[int]:
         """Return all known DP IDs for this device model."""
         dps: set[int] = set()
@@ -276,6 +281,7 @@ IIC_400_PROFILE = DeviceProfile(
     # volatile history scroll — both confirmed on real hardware 2026-11-21.
     supports_dp45_readback=False,
     supports_merge_history=False,
+    supports_cancel_alarm_voice=False,
 )
 
 
